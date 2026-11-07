@@ -5666,5 +5666,5710 @@ footer{max-width:1500px;margin:0 auto;padding:14px 22px 26px;color:var(--muted);
   window.__BW.buildMarkdown = buildMarkdown
 })()
 </script>
+
+
+<!-- ================= BEGIN Chunk-1 ================= -->
+<script>
+(function () {
+  'use strict';
+
+  if (window.__BW_P5_LOADED) return;
+  window.__BW_P5_LOADED = true;
+
+  let BW = null;
+  let BS = null;
+
+  function boot() {
+    BW = window.__BW;
+    BS = window.BS;
+
+    if (!BW || !BS) {
+      setTimeout(boot, 80);
+      return;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
+  }
+
+  function start() {
+    injectUI();
+    bindUI();
+    observeData();
+    refreshColumns();
+  }
+
+  function injectUI() {
+    const tabs = document.getElementById('tabs');
+    if (!tabs) return;
+
+    if (!document.querySelector('.tab[data-tab="phase5"]')) {
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.dataset.tab = 'phase5';
+      btn.innerHTML = '<b>P5</b> Unsupervised';
+
+      const summaryBtn = tabs.querySelector('[data-tab="summary"]');
+      if (summaryBtn) tabs.insertBefore(btn, summaryBtn);
+      else tabs.appendChild(btn);
+
+      btn.addEventListener('click', function () {
+        refreshColumns();
+        BW.switchTab('phase5');
+      });
+    }
+
+    if (document.getElementById('tab-phase5')) return;
+
+    const pane = document.createElement('section');
+    pane.id = 'tab-phase5';
+    pane.className = 'tabpane';
+
+    pane.innerHTML = `
+      <article class="card">
+        <div class="card-head">
+          <h3>P5 · Unsupervised learning &amp; cluster analysis</h3>
+          <span class="badge info">PCA · K-means · Ward · DBSCAN · correlation</span>
+        </div>
+
+        <p class="verdict-line">
+          Uses the currently loaded dataset. Select numeric columns, choose a method, and run.
+          Missing values are excluded row-wise for the selected columns.
+        </p>
+
+        <div class="two-col">
+          <div>
+            <label class="lbl">Numeric variables</label>
+            <div id="unsupCols" class="checks"></div>
+            <div class="row">
+              <button id="unsupAll" class="btn ghost" type="button">Select all</button>
+              <button id="unsupNone" class="btn ghost" type="button">Clear</button>
+              <button id="btnUnsupRefresh" class="btn ghost" type="button">Refresh columns</button>
+            </div>
+          </div>
+
+          <div>
+            <label class="lbl">Optional row-label column</label>
+            <select id="unsupLabel"></select>
+
+            <label class="lbl">Method</label>
+            <select id="unsupMethod">
+              <option value="pca">PCA</option>
+              <option value="kmeans">K-means</option>
+              <option value="hierarchical">Hierarchical clustering (Ward)</option>
+              <option value="dbscan">DBSCAN</option>
+              <option value="correlation">Correlation matrix</option>
+              <option value="elbow">K-means elbow</option>
+            </select>
+
+            <label class="lbl">Number of clusters k</label>
+            <input id="unsupK" type="number" min="2" max="50" value="3">
+
+            <label class="lbl">DBSCAN epsilon</label>
+            <input id="unsupEps" type="number" step="any" min="0" value="0.5">
+
+            <label class="lbl">DBSCAN minPts</label>
+            <input id="unsupMinPts" type="number" min="1" value="5">
+
+            <label style="display:block;margin-top:10px;font-size:12.5px">
+              <input type="checkbox" id="unsupStandardize" checked>
+              Standardize columns before PCA / clustering
+            </label>
+
+            <div class="row">
+              <button id="btnUnsupRun" class="btn primary" type="button">Run unsupervised analysis</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="unsupStatus" style="margin-top:12px"></div>
+        <div id="unsupOut" style="margin-top:12px"></div>
+      </article>
+    `;
+
+    const main = document.querySelector('main');
+    if (main) main.appendChild(pane);
+  }
+
+  function bindUI() {
+    const btnAll = document.getElementById('unsupAll');
+    const btnNone = document.getElementById('unsupNone');
+    const btnRefresh = document.getElementById('btnUnsupRefresh');
+    const btnRun = document.getElementById('btnUnsupRun');
+
+    if (btnAll) btnAll.addEventListener('click', function () { setAllColumns(true); });
+    if (btnNone) btnNone.addEventListener('click', function () { setAllColumns(false); });
+    if (btnRefresh) btnRefresh.addEventListener('click', refreshColumns);
+    if (btnRun) btnRun.addEventListener('click', runUnsupervised);
+  }
+
+  function observeData() {
+    const target = document.getElementById('dataPreview');
+    if (!target || !window.MutationObserver) return;
+
+    const obs = new MutationObserver(function () {
+      setTimeout(refreshColumns, 120);
+    });
+
+    obs.observe(target, { childList: true, subtree: true });
+  }
+
+  function refreshColumns() {
+    const colDiv = document.getElementById('unsupCols');
+    if (!colDiv) return;
+
+    const data = BW.state && BW.state.data;
+    if (!data) {
+      colDiv.innerHTML = '<span class="muted small">No data loaded.</span>';
+      fillLabelSelect('');
+      return;
+    }
+
+    const prev = getSelectedColumns();
+    const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+
+    if (!numeric.length) {
+      colDiv.innerHTML = '<span class="muted small">No numeric columns found.</span>';
+      fillLabelSelect('');
+      return;
+    }
+
+    colDiv.innerHTML = numeric.map(function (c, idx) {
+      const checked = prev.length ? prev.includes(c.name) : idx < 8;
+      return '<label><input type="checkbox" value="' + BW.esc(c.name) + '" ' +
+        (checked ? 'checked' : '') + '> ' +
+        BW.esc(c.name) + ' <span class="muted">n=' + c.n + '</span></label>';
+    }).join('');
+
+    const labelSel = document.getElementById('unsupLabel');
+    fillLabelSelect(labelSel ? labelSel.value : '');
+  }
+
+  function fillLabelSelect(selected) {
+    const sel = document.getElementById('unsupLabel');
+    if (!sel) return;
+
+    const data = BW.state && BW.state.data;
+    if (!data) {
+      sel.innerHTML = '<option value="">None</option>';
+      return;
+    }
+
+    let html = '<option value="">None</option>';
+    data.columns.forEach(function (c) {
+      html += '<option value="' + BW.esc(c.name) + '">' + BW.esc(c.name) +
+        ' (' + c.type + ')</option>';
+    });
+
+    sel.innerHTML = html;
+
+    if (selected && data.columns.some(function (c) { return c.name === selected; })) {
+      sel.value = selected;
+    } else {
+      sel.value = '';
+    }
+  }
+
+  function setAllColumns(checked) {
+    document.querySelectorAll('#unsupCols input[type="checkbox"]').forEach(function (inp) {
+      inp.checked = !!checked;
+    });
+  }
+
+  function getSelectedColumns() {
+    return Array.prototype.map.call(
+      document.querySelectorAll('#unsupCols input[type="checkbox"]:checked'),
+      function (inp) { return inp.value; }
+    );
+  }
+
+  function runUnsupervised() {
+    const out = document.getElementById('unsupOut');
+    const status = document.getElementById('unsupStatus');
+
+    try {
+      const data = BW.state && BW.state.data;
+      if (!data) throw new Error('No dataset loaded. Load or paste data first.');
+
+      const names = getSelectedColumns();
+      if (!names.length) throw new Error('Select at least one numeric column.');
+
+      const labelColName = document.getElementById('unsupLabel').value;
+      const labelCol = labelColName
+        ? data.columns.find(function (c) { return c.name === labelColName; })
+        : null;
+
+      const built = getCompleteMatrix(data, names, labelCol);
+      const X = built.X;
+      const rowLabels = built.labels;
+
+      if (X.length < 3) {
+        throw new Error('Fewer than 3 complete cases across selected columns.');
+      }
+
+      const standardizeBox = document.getElementById('unsupStandardize');
+      const Z = standardizeBox && standardizeBox.checked ? standardize(X) : X.map(function (r) { return r.slice(); });
+
+      const method = document.getElementById('unsupMethod').value;
+
+      status.innerHTML = '<div class="alert info">' +
+        BW.esc('Complete cases: ' + X.length + ' · variables: ' + names.length) +
+        '</div>';
+
+      if (method === 'correlation') {
+        const C = corrMatrix(X);
+        out.innerHTML = corrHtml(names, C);
+        return;
+      }
+
+      if (method === 'elbow') {
+        const kmax = Math.min(10, X.length);
+        const res = elbow(Z, kmax);
+        out.innerHTML = elbowHtml(res);
+        drawElbow('unsupElbowCanvas', res);
+        return;
+      }
+
+      if (method === 'pca') {
+        const comps = Math.min(2, Z[0].length);
+        const pc = pca(Z, comps);
+
+        if (!pc.loadings.length) {
+          throw new Error('PCA failed: no usable variance in selected variables.');
+        }
+
+        const hasScatter = pc.loadings.length >= 2 && X.length <= 3000;
+        out.innerHTML = pcaHtml(pc, names, hasScatter);
+
+        if (hasScatter) {
+          const xlab = 'PC1 (' + pct(pc.explained[0], pc.totalVar) + ')';
+          const ylab = 'PC2 (' + pct(pc.explained[1], pc.totalVar) + ')';
+          const points = pc.scores.map(function (s) {
+            return { x: s[0] || 0, y: s[1] || 0 };
+          });
+          drawScatterColors('unsupScatter', points, null, xlab, ylab);
+        }
+        return;
+      }
+
+      if (method === 'kmeans') {
+        const k = getK(X.length);
+        const km = kmeans(Z, k, 42, 200, 5);
+        finishClusterOutput({
+          methodTitle: 'K-means clustering',
+          X: X,
+          Z: Z,
+          rowLabels: rowLabels,
+          colNames: names,
+          labels: km.labels,
+          inertia: km.inertia,
+          k: k,
+          out: out
+        });
+        return;
+      }
+
+      if (method === 'hierarchical') {
+        const k = getK(X.length);
+        const h = hierarchicalWard(Z, k);
+        finishClusterOutput({
+          methodTitle: 'Hierarchical clustering (Ward linkage)',
+          X: X,
+          Z: Z,
+          rowLabels: rowLabels,
+          colNames: names,
+          labels: h.labels,
+          k: k,
+          out: out
+        });
+        return;
+      }
+
+      if (method === 'dbscan') {
+        const eps = parseFloat(document.getElementById('unsupEps').value || '0.5');
+        const minPts = parseInt(document.getElementById('unsupMinPts').value || '5', 10);
+
+        if (!isFinite(eps) || eps <= 0) throw new Error('DBSCAN epsilon must be positive.');
+        if (!isFinite(minPts) || minPts < 1) throw new Error('DBSCAN minPts must be at least 1.');
+
+        const db = dbscan(Z, eps, minPts);
+        finishClusterOutput({
+          methodTitle: 'DBSCAN clustering',
+          X: X,
+          Z: Z,
+          rowLabels: rowLabels,
+          colNames: names,
+          labels: db.labels,
+          eps: eps,
+          minPts: minPts,
+          out: out
+        });
+        return;
+      }
+
+      throw new Error('Unknown unsupervised method.');
+    } catch (err) {
+      if (out) {
+        out.innerHTML = '<div class="alert bad">' + BW.esc(err.message || String(err)) + '</div>';
+      }
+      if (status) status.innerHTML = '';
+    }
+  }
+
+  function finishClusterOutput(cfg) {
+    const labels = cfg.labels;
+    const nClusters = new Set(labels.filter(function (l) { return l >= 0; })).size;
+    const noise = labels.filter(function (l) { return l < 0; }).length;
+
+    const silArr = cfg.X.length <= 1200 ? silhouette(cfg.Z, labels) : null;
+    const silStats = silArr ? silSummary(silArr, labels) : null;
+    const centers = centersByLabels(cfg.Z, labels);
+
+    const proj = cfg.X.length <= 2000 ? scatterProjection(cfg.Z) : null;
+
+    cfg.out.innerHTML = clusterOutputHtml({
+      methodTitle: cfg.methodTitle,
+      n: cfg.X.length,
+      p: cfg.Z[0].length,
+      k: cfg.k,
+      eps: cfg.eps,
+      minPts: cfg.minPts,
+      labels: labels,
+      nClusters: nClusters,
+      noise: noise,
+      silMean: silStats ? silStats.mean : NaN,
+      inertia: cfg.inertia,
+      centers: centers,
+      colNames: cfg.colNames,
+      rowLabels: cfg.rowLabels,
+      hasScatter: !!proj,
+      scatterNote: proj ? (proj.xlabel + ' vs ' + proj.ylabel) : ''
+    });
+
+    if (proj) {
+      drawScatterColors('unsupScatter', proj.points, labels, proj.xlabel, proj.ylabel);
+    }
+  }
+
+  function getK(n) {
+    const el = document.getElementById('unsupK');
+    let k = parseInt(el ? el.value : '3', 10);
+    if (!isFinite(k)) k = 3;
+    return Math.max(2, Math.min(k, Math.max(2, n - 1)));
+  }
+
+  function getCompleteMatrix(data, names, labelCol) {
+    const cols = names.map(function (nm) {
+      return data.columns.find(function (c) { return c.name === nm; });
+    }).filter(Boolean);
+
+    const n = data.nRows;
+    const X = [];
+    const labels = [];
+
+    for (let i = 0; i < n; i++) {
+      const row = [];
+      let ok = true;
+
+      for (let j = 0; j < cols.length; j++) {
+        const v = cols[j].values[i];
+        if (typeof v === 'number' && isFinite(v)) {
+          row.push(v);
+        } else {
+          ok = false;
+          break;
+        }
+      }
+
+      if (ok) {
+        X.push(row);
+        labels.push(labelCol ? String(labelCol.values[i] == null ? ('row ' + (i + 1)) : labelCol.values[i]) : String(i + 1));
+      }
+    }
+
+    return { X: X, labels: labels };
+  }
+
+  function standardize(X) {
+    const n = X.length;
+    const p = X[0].length;
+    const means = new Array(p).fill(0);
+    const sds = new Array(p).fill(0);
+
+    for (let j = 0; j < p; j++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += X[i][j];
+      means[j] = s / n;
+    }
+
+    for (let j = 0; j < p; j++) {
+      let ss = 0;
+      for (let i = 0; i < n; i++) ss += (X[i][j] - means[j]) * (X[i][j] - means[j]);
+      sds[j] = Math.sqrt(ss / Math.max(1, n - 1)) || 1;
+    }
+
+    return X.map(function (row) {
+      return row.map(function (v, j) {
+        return (v - means[j]) / (sds[j] || 1);
+      });
+    });
+  }
+
+  function dist2(a, b) {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) {
+      const d = a[i] - b[i];
+      s += d * d;
+    }
+    return s;
+  }
+
+  function dist(a, b) {
+    return Math.sqrt(dist2(a, b));
+  }
+
+  function mulberry(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s |= 0;
+      s = (s + 0x6D2B79F5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function kmeans(X, k, seed, maxIter, nInit) {
+    seed = seed || 42;
+    maxIter = maxIter || 200;
+    nInit = nInit || 5;
+
+    const n = X.length;
+    const p = X[0].length;
+
+    if (k <= 1) {
+      const center = new Array(p).fill(0);
+      for (let j = 0; j < p; j++) {
+        let s = 0;
+        for (let i = 0; i < n; i++) s += X[i][j];
+        center[j] = s / n;
+      }
+      let inertia = 0;
+      for (let i = 0; i < n; i++) inertia += dist2(X[i], center);
+      return { labels: new Array(n).fill(0), centers: [center], inertia: inertia };
+    }
+
+    const rng = mulberry(seed);
+    let best = null;
+
+    for (let init = 0; init < nInit; init++) {
+      const start = kmeansPlusPlus(X, k, rng);
+      const res = kmeansOnce(X, start, maxIter);
+      if (!best || res.inertia < best.inertia) best = res;
+    }
+
+    return best;
+  }
+
+  function kmeansPlusPlus(X, k, rng) {
+    const n = X.length;
+    const centers = [];
+    const first = Math.floor(rng() * n);
+    centers.push(X[first].slice());
+
+    while (centers.length < k) {
+      const minD2 = new Array(n).fill(Infinity);
+      let total = 0;
+
+      for (let i = 0; i < n; i++) {
+        let d = Infinity;
+        for (let c = 0; c < centers.length; c++) {
+          const dd = dist2(X[i], centers[c]);
+          if (dd < d) d = dd;
+        }
+        minD2[i] = d;
+        total += d;
+      }
+
+      if (total === 0) {
+        centers.push(X[Math.floor(rng() * n)].slice());
+        continue;
+      }
+
+      let target = total * rng();
+      let chosen = -1;
+
+      for (let i = 0; i < n; i++) {
+        target -= minD2[i];
+        if (target <= 0) {
+          chosen = i;
+          break;
+        }
+      }
+
+      if (chosen < 0) chosen = n - 1;
+      centers.push(X[chosen].slice());
+    }
+
+    return centers;
+  }
+
+  function kmeansOnce(X, initCenters, maxIter) {
+    const n = X.length;
+    const k = initCenters.length;
+    const p = X[0].length;
+
+    let centers = initCenters.map(function (c) { return c.slice(); });
+    let labels = new Array(n).fill(-1);
+    let inertia = 0;
+
+    for (let iter = 0; iter < maxIter; iter++) {
+      const assigned = assignClusters(X, centers);
+      let changed = false;
+
+      for (let i = 0; i < n; i++) {
+        if (assigned.labels[i] !== labels[i]) changed = true;
+      }
+
+      labels = assigned.labels;
+      inertia = assigned.inertia;
+
+      if (!changed) break;
+
+      const sums = Array.from({ length: k }, function () { return new Array(p).fill(0); });
+      const counts = new Array(k).fill(0);
+
+      for (let i = 0; i < n; i++) {
+        const c = labels[i];
+        counts[c]++;
+        for (let j = 0; j < p; j++) sums[c][j] += X[i][j];
+      }
+
+      for (let c = 0; c < k; c++) {
+        if (counts[c] > 0) {
+          for (let j = 0; j < p; j++) centers[c][j] = sums[c][j] / counts[c];
+        } else {
+          let far = 0;
+          for (let i = 1; i < n; i++) {
+            if (assigned.dists[i] > assigned.dists[far]) far = i;
+          }
+          centers[c] = X[far].slice();
+        }
+      }
+    }
+
+    const final = assignClusters(X, centers);
+    return { labels: final.labels, centers: centers, inertia: final.inertia };
+  }
+
+  function assignClusters(X, centers) {
+    const labels = [];
+    const dists = [];
+    let inertia = 0;
+
+    for (let i = 0; i < X.length; i++) {
+      let best = 0;
+      let bestD = Infinity;
+
+      for (let c = 0; c < centers.length; c++) {
+        const d = dist2(X[i], centers[c]);
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+
+      labels.push(best);
+      dists.push(bestD);
+      inertia += bestD;
+    }
+
+    return { labels: labels, dists: dists, inertia: inertia };
+  }
+
+  function hierarchicalWard(X, k) {
+    const n = X.length;
+
+    if (k >= n) {
+      return { labels: X.map(function (_, i) { return i; }) };
+    }
+
+    let clusters = X.map(function (row, i) {
+      return { members: [i], center: row.slice(), size: 1 };
+    });
+
+    let active = clusters.map(function (_, i) { return i; });
+
+    while (active.length > k) {
+      let bestI = 0;
+      let bestJ = 1;
+      let bestD = Infinity;
+
+      for (let ii = 0; ii < active.length; ii++) {
+        const ci = clusters[active[ii]];
+        for (let jj = ii + 1; jj < active.length; jj++) {
+          const cj = clusters[active[jj]];
+          const d = (ci.size * cj.size) / (ci.size + cj.size) * dist2(ci.center, cj.center);
+          if (d < bestD) {
+            bestD = d;
+            bestI = ii;
+            bestJ = jj;
+          }
+        }
+      }
+
+      const ia = active[bestI];
+      const ja = active[bestJ];
+      const ci = clusters[ia];
+      const cj = clusters[ja];
+
+      const size = ci.size + cj.size;
+      const center = ci.center.map(function (v, idx) {
+        return (ci.size * v + cj.size * cj.center[idx]) / size;
+      });
+
+      clusters.push({
+        members: ci.members.concat(cj.members),
+        center: center,
+        size: size
+      });
+
+      active = active.filter(function (_, idx) { return idx !== bestI && idx !== bestJ; });
+      active.push(clusters.length - 1);
+    }
+
+    const labels = new Array(n).fill(0);
+    active.forEach(function (clusterIdx, group) {
+      clusters[clusterIdx].members.forEach(function (m) {
+        labels[m] = group;
+      });
+    });
+
+    return { labels: labels };
+  }
+
+  function dbscan(X, eps, minPts) {
+    const n = X.length;
+    const labels = new Array(n).fill(-2);
+    let cluster = -1;
+
+    function regionQuery(i) {
+      const out = [];
+      for (let j = 0; j < n; j++) {
+        if (dist(X[i], X[j]) <= eps) out.push(j);
+      }
+      return out;
+    }
+
+    for (let i = 0; i < n; i++) {
+      if (labels[i] !== -2) continue;
+
+      const neigh = regionQuery(i);
+      if (neigh.length < minPts) {
+        labels[i] = -1;
+        continue;
+      }
+
+      cluster++;
+      labels[i] = cluster;
+
+      const queue = neigh.slice();
+      while (queue.length) {
+        const j = queue.shift();
+
+        if (labels[j] === -1) labels[j] = cluster;
+        if (labels[j] !== -2) continue;
+
+        labels[j] = cluster;
+        const jn = regionQuery(j);
+
+        if (jn.length >= minPts) {
+          queue.push.apply(queue, jn);
+        }
+      }
+    }
+
+    for (let i = 0; i < n; i++) {
+      if (labels[i] === -2) labels[i] = -1;
+    }
+
+    return { labels: labels };
+  }
+
+  function silhouette(X, labels) {
+    const n = X.length;
+    const unique = Array.from(new Set(labels)).filter(function (l) { return l >= 0; });
+
+    if (unique.length < 2) return null;
+
+    const out = new Array(n).fill(null);
+
+    for (let i = 0; i < n; i++) {
+      if (labels[i] < 0) continue;
+
+      const same = [];
+      for (let j = 0; j < n; j++) {
+        if (j !== i && labels[j] === labels[i]) same.push(j);
+      }
+
+      if (!same.length) {
+        out[i] = 0;
+        continue;
+      }
+
+      let a = 0;
+      same.forEach(function (j) { a += dist(X[i], X[j]); });
+      a /= same.length;
+
+      let b = Infinity;
+
+      unique.forEach(function (l) {
+        if (l === labels[i]) return;
+
+        let s = 0;
+        let c = 0;
+        for (let j = 0; j < n; j++) {
+          if (labels[j] === l) {
+            s += dist(X[i], X[j]);
+            c++;
+          }
+        }
+
+        if (c > 0) b = Math.min(b, s / c);
+      });
+
+      if (!isFinite(b)) out[i] = 0;
+      else out[i] = (b - a) / Math.max(a, b);
+    }
+
+    return out;
+  }
+
+  function silSummary(sil, labels) {
+    const vals = sil.filter(function (v) { return v !== null && isFinite(v); });
+    const mean = vals.length ? vals.reduce(function (a, b) { return a + b; }, 0) / vals.length : NaN;
+
+    const byCluster = {};
+    vals.forEach(function (v, i) {
+      const l = labels[i];
+      if (!byCluster[l]) byCluster[l] = [];
+      byCluster[l].push(v);
+    });
+
+    const table = Object.keys(byCluster).map(function (k) {
+      const arr = byCluster[k];
+      return {
+        cluster: k,
+        mean: arr.reduce(function (a, b) { return a + b; }, 0) / arr.length,
+        n: arr.length
+      };
+    });
+
+    return { mean: mean, byCluster: table };
+  }
+
+  function pca(X, components) {
+    const n = X.length;
+    const p = X[0].length;
+    components = Math.min(components || 2, p, n);
+
+    const means = new Array(p).fill(0);
+    for (let j = 0; j < p; j++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += X[i][j];
+      means[j] = s / n;
+    }
+
+    const Z = X.map(function (row) {
+      return row.map(function (v, j) { return v - means[j]; });
+    });
+
+    const C = Array.from({ length: p }, function () { return new Array(p).fill(0); });
+
+    for (let i = 0; i < n; i++) {
+      for (let a = 0; a < p; a++) {
+        for (let b = a; b < p; b++) {
+          C[a][b] += Z[i][a] * Z[i][b];
+        }
+      }
+    }
+
+    const denom = Math.max(1, n - 1);
+    for (let a = 0; a < p; a++) {
+      for (let b = a; b < p; b++) {
+        C[a][b] /= denom;
+        C[b][a] = C[a][b];
+      }
+    }
+
+    let totalVar = 0;
+    for (let j = 0; j < p; j++) totalVar += C[j][j];
+
+    const vectors = [];
+    const explained = [];
+
+    function matVec(M, v) {
+      const out = new Array(p).fill(0);
+      for (let i = 0; i < p; i++) {
+        let s = 0;
+        for (let j = 0; j < p; j++) s += M[i][j] * v[j];
+        out[i] = s;
+      }
+      return out;
+    }
+
+    function dot(a, b) {
+      let s = 0;
+      for (let i = 0; i < a.length; i++) s += a[i] * b[i];
+      return s;
+    }
+
+    function normalize(v) {
+      const norm = Math.sqrt(dot(v, v)) || 1;
+      return v.map(function (x) { return x / norm; });
+    }
+
+    for (let comp = 0; comp < components; comp++) {
+      let v = Array.from({ length: p }, function (_, j) {
+        return Math.sin(j + comp + 1) + 0.5;
+      });
+
+      v = normalize(v);
+
+      for (let iter = 0; iter < 300; iter++) {
+        const w = matVec(C, v);
+        const norm = Math.sqrt(dot(w, w));
+
+        if (norm < 1e-12) break;
+        v = w.map(function (x) { return x / norm; });
+      }
+
+      const Cv = matVec(C, v);
+      const lambda = dot(v, Cv);
+
+      if (!(lambda > 1e-12)) break;
+
+      for (let a = 0; a < p; a++) {
+        for (let b = 0; b < p; b++) {
+          C[a][b] -= lambda * v[a] * v[b];
+        }
+      }
+
+      vectors.push(v);
+      explained.push(Math.max(0, lambda));
+
+      if (vectors.length === components) break;
+    }
+
+    let cum = 0;
+    const cumArr = explained.map(function (v) {
+      cum += v;
+      return cum;
+    });
+
+    const scores = Z.map(function (row) {
+      return vectors.map(function (vec) {
+        let s = 0;
+        for (let j = 0; j < p; j++) s += row[j] * vec[j];
+        return s;
+      });
+    });
+
+    return {
+      scores: scores,
+      loadings: vectors,
+      explained: explained,
+      cum: cumArr,
+      totalVar: totalVar
+    };
+  }
+
+  function scatterProjection(Z) {
+    const p = Z[0].length;
+
+    if (p === 1) {
+      return {
+        points: Z.map(function (r) { return { x: r[0], y: 0 }; }),
+        xlabel: 'variable',
+        ylabel: ''
+      };
+    }
+
+    const pc = pca(Z, 2);
+    if (!pc.loadings.length) return null;
+
+    const xlab = 'PC1 (' + pct(pc.explained[0], pc.totalVar) + ')';
+    const ylab = pc.loadings.length > 1 ? 'PC2 (' + pct(pc.explained[1], pc.totalVar) + ')' : '';
+
+    return {
+      points: pc.scores.map(function (s) {
+        return { x: s[0] || 0, y: s[1] || 0 };
+      }),
+      xlabel: xlab,
+      ylabel: ylab
+    };
+  }
+
+  function corrMatrix(X) {
+    const p = X[0].length;
+    const cols = [];
+
+    for (let j = 0; j < p; j++) {
+      cols.push(X.map(function (r) { return r[j]; }));
+    }
+
+    const C = Array.from({ length: p }, function () { return new Array(p).fill(1); });
+
+    for (let i = 0; i < p; i++) {
+      for (let j = i + 1; j < p; j++) {
+        const r = pearson(cols[i], cols[j]);
+        C[i][j] = r;
+        C[j][i] = r;
+      }
+    }
+
+    return C;
+  }
+
+  function pearson(x, y) {
+    const n = x.length;
+    let mx = 0, my = 0;
+
+    for (let i = 0; i < n; i++) {
+      mx += x[i];
+      my += y[i];
+    }
+
+    mx /= n;
+    my /= n;
+
+    let sxy = 0, sxx = 0, syy = 0;
+
+    for (let i = 0; i < n; i++) {
+      const dx = x[i] - mx;
+      const dy = y[i] - my;
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+
+    const den = Math.sqrt(sxx * syy);
+    return den > 0 ? sxy / den : NaN;
+  }
+
+  function elbow(Z, kmax) {
+    const out = [];
+
+    for (let k = 1; k <= kmax; k++) {
+      const km = kmeans(Z, k, 7, 100, k === 1 ? 1 : 3);
+      out.push({ k: k, inertia: km.inertia });
+    }
+
+    return out;
+  }
+
+  function centersByLabels(X, labels) {
+    const p = X[0].length;
+    const unique = Array.from(new Set(labels)).filter(function (l) { return l >= 0; }).sort(function (a, b) { return a - b; });
+
+    return unique.map(function (l) {
+      const rows = X.filter(function (_, i) { return labels[i] === l; });
+      return Array.from({ length: p }, function (_, j) {
+        let s = 0;
+        rows.forEach(function (r) { s += r[j]; });
+        return s / rows.length;
+      });
+    });
+  }
+
+  function fmt(v, d) {
+    if (BS && BS.fmt) return BS.fmt(v, d == null ? 3 : d);
+    return isFinite(v) ? Number(v).toFixed(d == null ? 3 : d) : '—';
+  }
+
+  function pct(v, total) {
+    if (!isFinite(v) || !isFinite(total) || total <= 0) return '—';
+    return (100 * v / total).toFixed(1) + '%';
+  }
+
+  function corrBg(v) {
+    if (!isFinite(v)) return 'transparent';
+    const a = Math.min(1, Math.abs(v));
+    return v >= 0
+      ? 'rgba(13,148,136,' + (a * 0.28).toFixed(3) + ')'
+      : 'rgba(214,69,80,' + (a * 0.28).toFixed(3) + ')';
+  }
+
+  function corrHtml(names, C) {
+    let html = '<div class="sect-h"><h3>Pearson correlation matrix</h3></div>';
+    html += '<div class="tblwrap"><table class="tbl"><thead><tr><th>Variable</th>';
+
+    names.forEach(function (nm) {
+      html += '<th class="num">' + BW.esc(nm) + '</th>';
+    });
+
+    html += '</tr></thead><tbody>';
+
+    names.forEach(function (nm, i) {
+      html += '<tr><td>' + BW.esc(nm) + '</td>';
+      names.forEach(function (_, j) {
+        const v = C[i][j];
+        html += '<td class="num" style="background:' + corrBg(v) + '">' + fmt(v, 3) + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    html += '<p class="note" style="margin-top:8px">Positive correlations are tinted teal; negative correlations are tinted red.</p>';
+
+    return html;
+  }
+
+  function elbowHtml(res) {
+    let html = '<div class="sect-h"><h3>K-means elbow</h3></div>';
+
+    html += '<div class="tblwrap"><table class="tbl"><thead><tr><th>k</th><th class="num">Inertia</th></tr></thead><tbody>';
+
+    res.forEach(function (r) {
+      html += '<tr><td class="num">' + r.k + '</td><td class="num">' + fmt(r.inertia, 3) + '</td></tr>';
+    });
+
+    html += '</tbody></table></div>';
+    html += '<div class="plotrow"><div class="plot"><h4>Elbow plot</h4><canvas id="unsupElbowCanvas" height="220"></canvas></div></div>';
+
+    return html;
+  }
+
+  function pcaHtml(pc, names, hasScatter) {
+    let html = '<div class="sect-h"><h3>Principal component analysis</h3></div>';
+
+    html += '<div class="two-col"><div><table class="tbl"><thead><tr><th>Component</th><th class="num">Variance</th><th class="num">Explained</th><th class="num">Cumulative</th></tr></thead><tbody>';
+
+    pc.explained.forEach(function (v, i) {
+      html += '<tr><td>PC' + (i + 1) + '</td><td class="num">' + fmt(v, 3) + '</td>' +
+        '<td class="num">' + pct(v, pc.totalVar) + '</td>' +
+        '<td class="num">' + pct(pc.cum[i], pc.totalVar) + '</td></tr>';
+    });
+
+    html += '</tbody></table></div><div>';
+
+    html += '<table class="tbl"><thead><tr><th>Variable</th>';
+    pc.loadings.forEach(function (_, i) {
+      html += '<th class="num">PC' + (i + 1) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    names.forEach(function (nm, j) {
+      html += '<tr><td>' + BW.esc(nm) + '</td>';
+      pc.loadings.forEach(function (vec) {
+        html += '<td class="num">' + fmt(vec[j], 3) + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div></div>';
+
+    if (hasScatter) {
+      html += '<div class="plotrow"><div class="plot"><h4>PCA scatter</h4><canvas id="unsupScatter" height="260"></canvas><div class="legend" id="lg_unsupScatter"></div></div></div>';
+    }
+
+    return html;
+  }
+
+  function clusterOutputHtml(o) {
+    let html = '<div class="sect-h"><h3>' + BW.esc(o.methodTitle) + '</h3></div>';
+
+    html += '<div class="two-col"><div>';
+    html += '<table class="tbl"><thead><tr><th>Metric</th><th class="num">Value</th></tr></thead><tbody>';
+
+    html += '<tr><td>Complete cases</td><td class="num">' + o.n + '</td></tr>';
+    html += '<tr><td>Variables</td><td class="num">' + o.p + '</td></tr>';
+
+    if (o.k != null) html += '<tr><td>k</td><td class="num">' + o.k + '</td></tr>';
+    if (o.eps != null) html += '<tr><td>DBSCAN eps</td><td class="num">' + fmt(o.eps, 3) + '</td></tr>';
+    if (o.minPts != null) html += '<tr><td>DBSCAN minPts</td><td class="num">' + o.minPts + '</td></tr>';
+
+    html += '<tr><td>Clusters</td><td class="num">' + o.nClusters + '</td></tr>';
+    html += '<tr><td>Noise points</td><td class="num">' + o.noise + '</td></tr>';
+
+    if (isFinite(o.inertia)) html += '<tr><td>Inertia</td><td class="num">' + fmt(o.inertia, 3) + '</td></tr>';
+    if (isFinite(o.silMean)) html += '<tr><td>Mean silhouette</td><td class="num">' + fmt(o.silMean, 3) + '</td></tr>';
+
+    html += '</tbody></table></div>';
+
+    html += '<div><table class="tbl"><thead><tr><th>Cluster</th><th class="num">Size</th></tr></thead><tbody>';
+
+    const counts = new Map();
+    o.labels.forEach(function (l) {
+      counts.set(l, (counts.get(l) || 0) + 1);
+    });
+
+    Array.from(counts.entries())
+      .sort(function (a, b) { return a[0] - b[0]; })
+      .forEach(function (entry) {
+        const l = entry[0];
+        const c = entry[1];
+        html += '<tr><td>' + (l < 0 ? 'Noise' : 'Cluster ' + (l + 1)) + '</td><td class="num">' + c + '</td></tr>';
+      });
+
+    html += '</tbody></table></div></div>';
+
+    if (o.hasScatter) {
+      html += '<div class="plotrow"><div class="plot"><h4>Cluster scatter plot</h4><canvas id="unsupScatter" height="260"></canvas><div class="legend" id="lg_unsupScatter"></div></div></div>';
+    }
+
+    if (o.centers && o.centers.length) {
+      const maxCols = Math.min(8, o.colNames.length);
+
+      html += '<div class="sect-h"><h3>Cluster centers</h3></div>';
+      html += '<div class="tblwrap"><table class="tbl"><thead><tr><th>Cluster</th>';
+
+      for (let i = 0; i < maxCols; i++) {
+        html += '<th class="num">' + BW.esc(o.colNames[i]) + '</th>';
+      }
+
+      html += '</tr></thead><tbody>';
+
+      o.centers.forEach(function (center, idx) {
+        html += '<tr><td>Cluster ' + (idx + 1) + '</td>';
+        for (let i = 0; i < maxCols; i++) {
+          html += '<td class="num">' + fmt(center[i], 3) + '</td>';
+        }
+        html += '</tr>';
+      });
+
+      html += '</tbody></table></div>';
+
+      if (o.colNames.length > maxCols) {
+        html += '<p class="note">Only the first ' + maxCols + ' variables are shown in the centers table.</p>';
+      }
+    }
+
+    const limit = 100;
+    html += '<div class="sect-h"><h3>Cluster assignments (first ' + Math.min(limit, o.labels.length) + ')</h3></div>';
+    html += '<div class="tblwrap"><table class="tbl"><thead><tr><th>Row label</th><th>Assigned cluster</th></tr></thead><tbody>';
+
+    for (let i = 0; i < Math.min(limit, o.labels.length); i++) {
+      const l = o.labels[i];
+      html += '<tr><td>' + BW.esc(o.rowLabels[i]) + '</td><td>' +
+        (l < 0 ? 'Noise' : 'Cluster ' + (l + 1)) + '</td></tr>';
+    }
+
+    html += '</tbody></table></div>';
+
+    if (o.labels.length > limit) {
+      html += '<p class="note">Additional rows are not shown in the assignment preview.</p>';
+    }
+
+    return html;
+  }
+
+  function colorFor(label) {
+    if (label == null) return BW.SERIES[0];
+    if (label < 0) return '#94a3b8';
+    return BW.SERIES[label % BW.SERIES.length];
+  }
+
+  function rangeOf(values) {
+    let lo = Infinity;
+    let hi = -Infinity;
+
+    values.forEach(function (v) {
+      if (isFinite(v)) {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    });
+
+    if (!isFinite(lo)) {
+      lo = 0;
+      hi = 1;
+    }
+
+    if (hi === lo) {
+      hi = lo + 1;
+      lo = lo - 1;
+    }
+
+    return [lo, hi];
+  }
+
+  function drawScatterColors(canvasId, points, labels, xlab, ylab) {
+    const cv = document.getElementById(canvasId);
+    if (!cv || !points || !points.length) return;
+
+    const H = 260;
+    const prep = BW.prepCanvas(cv, H);
+    const ctx = prep.ctx;
+    const w = prep.w;
+    const h = prep.h;
+
+    const pad = { l: 46, r: 14, t: 14, b: 36 };
+
+    const xr = rangeOf(points.map(function (p) { return p.x; }));
+    const yr = rangeOf(points.map(function (p) { return p.y; }));
+
+    const xmap = function (v) {
+      return pad.l + ((v - xr[0]) / (xr[1] - xr[0])) * (w - pad.l - pad.r);
+    };
+
+    const ymap = function (v) {
+      return h - pad.b - ((v - yr[0]) / (yr[1] - yr[0])) * (h - pad.t - pad.b);
+    };
+
+    const xt = BW.niceTicks(xr[0], xr[1], 6);
+    const yt = BW.niceTicks(yr[0], yr[1], 5);
+
+    BW.axes(ctx, w, h, pad, xt, yt, xmap, ymap, xlab || '', ylab || '');
+
+    ctx.globalAlpha = 0.78;
+
+    points.forEach(function (p, i) {
+      if (!isFinite(p.x) || !isFinite(p.y)) return;
+      const label = labels ? labels[i] : null;
+      ctx.fillStyle = labels ? colorFor(label) : BW.SERIES[0];
+      ctx.beginPath();
+      ctx.arc(xmap(p.x), ymap(p.y), 2.7, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+
+    ctx.globalAlpha = 1;
+
+    const legend = document.getElementById('lg_' + canvasId);
+    if (legend && labels) {
+      const unique = Array.from(new Set(labels)).sort(function (a, b) { return a - b; });
+      legend.innerHTML = unique.map(function (l) {
+        return '<span><i style="background:' + colorFor(l) + '"></i>' +
+          (l < 0 ? 'Noise' : 'Cluster ' + (l + 1)) + '</span>';
+      }).join('');
+    } else if (legend) {
+      legend.innerHTML = '';
+    }
+  }
+
+  function drawElbow(canvasId, res) {
+    const cv = document.getElementById(canvasId);
+    if (!cv || !res || !res.length) return;
+
+    const H = 220;
+    const prep = BW.prepCanvas(cv, H);
+    const ctx = prep.ctx;
+    const w = prep.w;
+    const h = prep.h;
+
+    const pad = { l: 52, r: 14, t: 14, b: 34 };
+
+    const xs = res.map(function (r) { return r.k; });
+    const ys = res.map(function (r) { return r.inertia; });
+
+    const xr = rangeOf(xs);
+    const yr = rangeOf(ys);
+
+    const xmap = function (v) {
+      return pad.l + ((v - xr[0]) / (xr[1] - xr[0])) * (w - pad.l - pad.r);
+    };
+
+    const ymap = function (v) {
+      return h - pad.b - ((v - yr[0]) / (yr[1] - yr[0])) * (h - pad.t - pad.b);
+    };
+
+    const xt = xs;
+    const yt = BW.niceTicks(yr[0], yr[1], 5);
+
+    BW.axes(ctx, w, h, pad, xt, yt, xmap, ymap, 'number of clusters k', 'inertia');
+
+    ctx.strokeStyle = BW.SERIES[0];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    res.forEach(function (r, i) {
+      const x = xmap(r.k);
+      const y = ymap(r.inertia);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+
+    ctx.stroke();
+
+    ctx.fillStyle = BW.SERIES[0];
+    res.forEach(function (r) {
+      ctx.beginPath();
+      ctx.arc(xmap(r.k), ymap(r.inertia), 3, 0, 2 * Math.PI);
+      ctx.fill();
+    });
+  }
+
+  boot();
+})();
+</script>
+<!-- ================= END Chunk-1 ================= -->
+
+<!-- ================= BEGIN Chunk-2 ================= -->
+<script>
+(function () {
+  'use strict';
+
+  if (window.__BW_P6_LOADED) return;
+  window.__BW_P6_LOADED = true;
+
+  let BW = null;
+  let BS = null;
+
+  function boot() {
+    BW = window.__BW;
+    BS = window.BS;
+
+    if (!BW || !BS) {
+      setTimeout(boot, 80);
+      return;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
+  }
+
+  function start() {
+    injectUI();
+    bindUI();
+    observeData();
+    refreshColumns();
+    updateVisibility();
+  }
+
+  function injectUI() {
+    const tabs = document.getElementById('tabs');
+    if (!tabs) return;
+
+    if (!document.querySelector('.tab[data-tab="phase6"]')) {
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.dataset.tab = 'phase6';
+      btn.innerHTML = '<b>P6</b> Extra tests';
+
+      const summaryBtn = tabs.querySelector('[data-tab="summary"]');
+      if (summaryBtn) tabs.insertBefore(btn, summaryBtn);
+      else tabs.appendChild(btn);
+
+      btn.addEventListener('click', function () {
+        refreshColumns();
+        updateVisibility();
+        BW.switchTab('phase6');
+      });
+    }
+
+    if (document.getElementById('tab-phase6')) return;
+
+    const pane = document.createElement('section');
+    pane.id = 'tab-phase6';
+    pane.className = 'tabpane';
+
+    pane.innerHTML = `
+      <article class="card">
+        <div class="card-head">
+          <h3>P6 · Additional tests &amp; diagnostics</h3>
+          <span class="badge info">McNemar · Cochran Q · Kendall · partial corr · robust t · regression diagnostics</span>
+        </div>
+
+        <p class="verdict-line">
+          Uses the currently loaded dataset. Missing values are excluded test-by-test.
+          For binary tests, specify the positive level if automatic detection is ambiguous.
+        </p>
+
+        <div class="two-col">
+          <div>
+            <label class="lbl">Test / diagnostic</label>
+            <select id="extraMethod">
+              <option value="mcnemar">McNemar paired binary test</option>
+              <option value="cochran">Cochran's Q (≥ 3 binary repeated measures)</option>
+              <option value="kendall">Kendall tau-b correlation</option>
+              <option value="partial">Partial correlation (one control variable)</option>
+              <option value="yuen">Yuen robust two-sample t-test (20% trimming)</option>
+              <option value="brownforsythe">Brown-Forsythe / Levene equality of variances</option>
+              <option value="regdiag">Multiple regression diagnostics (VIF, DW, Cook)</option>
+            </select>
+
+            <div id="positiveWrap" style="display:none">
+              <label class="lbl">Positive level (optional)</label>
+              <input type="text" id="extraPositive" placeholder="e.g., 1, Yes, Responder">
+            </div>
+
+            <div id="binWrap" style="display:none">
+              <label class="lbl">Binary column A</label>
+              <select id="extraBin1"></select>
+
+              <label class="lbl">Binary column B</label>
+              <select id="extraBin2"></select>
+            </div>
+
+            <div id="cochranWrap" style="display:none">
+              <label class="lbl">Binary condition columns</label>
+              <div id="extraCochranCols" class="checks"></div>
+            </div>
+
+            <div id="xyWrap" style="display:none">
+              <label class="lbl">X variable (numeric)</label>
+              <select id="extraX"></select>
+
+              <label class="lbl">Y variable (numeric)</label>
+              <select id="extraY"></select>
+            </div>
+
+            <div id="controlWrap" style="display:none">
+              <label class="lbl">Control variable (numeric)</label>
+              <select id="extraControl"></select>
+            </div>
+
+            <div id="outcomeWrap" style="display:none">
+              <label class="lbl">Outcome (numeric)</label>
+              <select id="extraOutcome"></select>
+            </div>
+
+            <div id="groupWrap" style="display:none">
+              <label class="lbl">Grouping variable (categorical)</label>
+              <select id="extraGroup"></select>
+            </div>
+
+            <div id="regWrap" style="display:none">
+              <label class="lbl">Predictors (numeric)</label>
+              <div id="extraPredCols" class="checks"></div>
+            </div>
+
+            <div class="row">
+              <button id="btnExtraRefresh" class="btn ghost" type="button">Refresh columns</button>
+              <button id="btnExtraRun" class="btn primary" type="button">Run selected test</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="alert info">
+              <b>Quick guide</b><br>
+              · McNemar: paired binary before/after columns.<br>
+              · Cochran Q: ≥ 3 binary columns measured on the same subjects.<br>
+              · Kendall: robust rank correlation.<br>
+              · Partial correlation: association between X and Y after removing one control variable.<br>
+              · Yuen: robust alternative to two-sample t-test under outliers.<br>
+              · Brown-Forsythe: robust equality of variances.<br>
+              · Regression diagnostics: OLS + VIF, Durbin-Watson, residual normality, leverage/Cook distance.
+            </div>
+          </div>
+        </div>
+
+        <div id="extraStatus" style="margin-top:12px"></div>
+        <div id="extraOut" style="margin-top:12px"></div>
+      </article>
+    `;
+
+    const main = document.querySelector('main');
+    if (main) main.appendChild(pane);
+  }
+
+  function bindUI() {
+    const btnRun = document.getElementById('btnExtraRun');
+    const btnRefresh = document.getElementById('btnExtraRefresh');
+    const method = document.getElementById('extraMethod');
+
+    if (btnRun) btnRun.addEventListener('click', runExtra);
+    if (btnRefresh) btnRefresh.addEventListener('click', refreshColumns);
+    if (method) method.addEventListener('change', updateVisibility);
+  }
+
+  function observeData() {
+    const target = document.getElementById('dataPreview');
+    if (!target || !window.MutationObserver) return;
+
+    const obs = new MutationObserver(function () {
+      setTimeout(refreshColumns, 120);
+    });
+
+    obs.observe(target, { childList: true, subtree: true });
+  }
+
+  function updateVisibility() {
+    const m = document.getElementById('extraMethod');
+    if (!m) return;
+
+    const method = m.value;
+
+    const wrappers = [
+      'positiveWrap',
+      'binWrap',
+      'cochranWrap',
+      'xyWrap',
+      'controlWrap',
+      'outcomeWrap',
+      'groupWrap',
+      'regWrap'
+    ];
+
+    const map = {
+      mcnemar: ['binWrap', 'positiveWrap'],
+      cochran: ['cochranWrap', 'positiveWrap'],
+      kendall: ['xyWrap'],
+      partial: ['xyWrap', 'controlWrap'],
+      yuen: ['outcomeWrap', 'groupWrap'],
+      brownforsythe: ['outcomeWrap', 'groupWrap'],
+      regdiag: ['outcomeWrap', 'regWrap']
+    };
+
+    const show = map[method] || [];
+
+    wrappers.forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = show.includes(id) ? 'block' : 'none';
+    });
+  }
+
+  function refreshColumns() {
+    const data = BW.state && BW.state.data;
+    if (!data) return;
+
+    const prev = getPrevSelection();
+
+    const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+    const categorical = data.columns.filter(function (c) { return c.type === 'categorical'; });
+    const binary = data.columns.filter(isBinaryColumn);
+
+    fillSelect('extraOutcome', numeric, prev.outcome);
+    fillSelect('extraX', numeric, prev.x);
+    fillSelect('extraY', numeric, prev.y);
+    fillSelect('extraControl', numeric, prev.control);
+
+    fillSelect('extraGroup', categorical, prev.group);
+    fillSelect('extraBin1', binary, prev.bin1);
+    fillSelect('extraBin2', binary, prev.bin2);
+
+    fillChecks('extraCochranCols', binary, prev.cochran, 3);
+    fillChecks('extraPredCols', numeric, prev.preds, 2);
+  }
+
+  function getPrevSelection() {
+    return {
+      outcome: val('extraOutcome'),
+      x: val('extraX'),
+      y: val('extraY'),
+      control: val('extraControl'),
+      group: val('extraGroup'),
+      bin1: val('extraBin1'),
+      bin2: val('extraBin2'),
+      cochran: getChecked('extraCochranCols'),
+      preds: getChecked('extraPredCols')
+    };
+  }
+
+  function val(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+  }
+
+  function getChecked(id) {
+    const box = document.getElementById(id);
+    if (!box) return [];
+
+    return Array.prototype.map.call(
+      box.querySelectorAll('input[type="checkbox"]:checked'),
+      function (inp) { return inp.value; }
+    );
+  }
+
+  function fillSelect(id, cols, selected) {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+
+    const prev = selected !== undefined ? selected : sel.value;
+
+    let html = '';
+    cols.forEach(function (c) {
+      html += '<option value="' + BW.esc(c.name) + '">' + BW.esc(c.name) + '</option>';
+    });
+
+    sel.innerHTML = html || '<option value="">No columns</option>';
+
+    if (prev && cols.some(function (c) { return c.name === prev; })) {
+      sel.value = prev;
+    } else if (cols.length) {
+      sel.value = cols[0].name;
+    } else {
+      sel.value = '';
+    }
+  }
+
+  function fillChecks(id, cols, selected, defaultCount) {
+    const box = document.getElementById(id);
+    if (!box) return;
+
+    const prev = selected && selected.length ? selected : getChecked(id);
+    const usePrev = prev.length > 0;
+
+    if (!cols.length) {
+      box.innerHTML = '<span class="muted small">No suitable columns.</span>';
+      return;
+    }
+
+    box.innerHTML = cols.map(function (c, idx) {
+      const checked = usePrev ? prev.includes(c.name) : idx < (defaultCount || 3);
+      return '<label><input type="checkbox" value="' + BW.esc(c.name) + '" ' +
+        (checked ? 'checked' : '') + '> ' + BW.esc(c.name) + '</label>';
+    }).join('');
+  }
+
+  function isBinaryColumn(c) {
+    const uniq = new Set();
+    c.values.forEach(function (v) {
+      if (v != null) uniq.add(v);
+    });
+    return uniq.size === 2;
+  }
+
+  function colByName(data, name) {
+    return data.columns.find(function (c) { return c.name === name; });
+  }
+
+  function runExtra() {
+    const out = document.getElementById('extraOut');
+    const status = document.getElementById('extraStatus');
+
+    try {
+      const data = BW.state && BW.state.data;
+      if (!data) throw new Error('No dataset loaded.');
+
+      const method = val('extraMethod');
+
+      status.innerHTML = '';
+      out.innerHTML = '';
+
+      if (method === 'mcnemar') return runMcNemar(data, out);
+      if (method === 'cochran') return runCochran(data, out);
+      if (method === 'kendall') return runKendall(data, out);
+      if (method === 'partial') return runPartial(data, out);
+      if (method === 'yuen') return runYuen(data, out);
+      if (method === 'brownforsythe') return runBrownForsythe(data, out);
+      if (method === 'regdiag') return runRegressionDiagnostics(data, out);
+
+      throw new Error('Unknown method.');
+    } catch (err) {
+      if (out) {
+        out.innerHTML = '<div class="alert bad">' + BW.esc(err.message || String(err)) + '</div>';
+      }
+    }
+  }
+
+  /* ---------------- McNemar ---------------- */
+
+  function runMcNemar(data, out) {
+    const c1 = colByName(data, val('extraBin1'));
+    const c2 = colByName(data, val('extraBin2'));
+
+    if (!c1 || !c2) throw new Error('Select two binary columns.');
+    if (c1.name === c2.name) throw new Error('Choose two different binary columns.');
+
+    const positiveText = val('extraPositive').trim();
+    const pos1 = positiveText ? positiveText : defaultPositive(c1);
+    const pos2 = positiveText ? positiveText : defaultPositive(c2);
+
+    let n11 = 0, n10 = 0, n01 = 0, n00 = 0;
+
+    for (let i = 0; i < data.nRows; i++) {
+      const v1 = c1.values[i];
+      const v2 = c2.values[i];
+
+      if (v1 == null || v2 == null) continue;
+
+      const x = binaryValue(v1, pos1);
+      const y = binaryValue(v2, pos2);
+
+      if (x === 1 && y === 1) n11++;
+      if (x === 1 && y === 0) n10++;
+      if (x === 0 && y === 1) n01++;
+      if (x === 0 && y === 0) n00++;
+    }
+
+    const n = n11 + n10 + n01 + n00;
+    const discordants = n10 + n01;
+
+    if (n < 5) throw new Error('Fewer than 5 complete paired observations.');
+
+    let p;
+    let methodNote;
+
+    if (discordants === 0) {
+      p = 1;
+      methodNote = 'No discordant pairs — no evidence of change.';
+    } else if (discordants <= 200) {
+      p = binomTwoSided(Math.min(n10, n01), discordants, 0.5);
+      methodNote = 'Exact binomial McNemar test.';
+    } else {
+      const chi = Math.max(0, Math.abs(n10 - n01) - 1);
+      const stat = (chi * chi) / discordants;
+      p = chi2Sf(stat, 1);
+      methodNote = 'Asymptotic McNemar test with continuity correction.';
+    }
+
+    const or = n01 > 0 ? n10 / n01 : NaN;
+    let orCi = [NaN, NaN];
+
+    if (n10 > 0 && n01 > 0) {
+      const logOr = Math.log(n10 / n01);
+      const se = Math.sqrt(1 / n10 + 1 / n01);
+      orCi = [Math.exp(logOr - 1.959964 * se), Math.exp(logOr + 1.959964 * se)];
+    }
+
+    out.innerHTML =
+      sectionTitle('McNemar paired binary test') +
+      table(
+        ['', esc(c2.name) + ' positive', esc(c2.name) + ' negative'],
+        [
+          [esc(c1.name) + ' positive', n11, n10],
+          [esc(c1.name) + ' negative', n01, n00]
+        ]
+      ) +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['Complete pairs', n],
+          ['Discordant pairs', discordants],
+          ['A positive → B negative', n10],
+          ['A negative → B positive', n01],
+          ['p-value', pFmt(p)],
+          ['Discordant odds ratio', fmt(or)],
+          ['95% CI of OR', ciText(orCi)],
+          ['Method', methodNote]
+        ]
+      );
+  }
+
+  /* ---------------- Cochran Q ---------------- */
+
+  function runCochran(data, out) {
+    const names = getChecked('extraCochranCols');
+    if (names.length < 3) throw new Error('Select at least 3 binary columns for Cochran’s Q.');
+
+    const cols = names.map(function (nm) {
+      const c = colByName(data, nm);
+      if (!c) throw new Error('Column not found: ' + nm);
+      return c;
+    });
+
+    const positiveText = val('extraPositive').trim();
+    const positives = cols.map(function (c) {
+      return positiveText ? positiveText : defaultPositive(c);
+    });
+
+    const rows = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const row = [];
+      let ok = true;
+
+      for (let j = 0; j < cols.length; j++) {
+        const v = cols[j].values[i];
+        if (v == null) {
+          ok = false;
+          break;
+        }
+        row.push(binaryValue(v, positives[j]));
+      }
+
+      if (ok) rows.push(row);
+    }
+
+    const n = rows.length;
+    const k = cols.length;
+
+    if (n < 5) throw new Error('Fewer than 5 complete cases across selected binary columns.');
+
+    const colSums = new Array(k).fill(0);
+    const rowSums = new Array(n).fill(0);
+
+    rows.forEach(function (r, i) {
+      r.forEach(function (v, j) {
+        colSums[j] += v;
+        rowSums[i] += v;
+      });
+    });
+
+    const total = colSums.reduce(function (a, b) { return a + b; }, 0);
+    const sumC2 = colSums.reduce(function (a, b) { return a + b * b; }, 0);
+    const sumR = rowSums.reduce(function (a, b) { return a + b; }, 0);
+    const sumR2 = rowSums.reduce(function (a, b) { return a + b * b; }, 0);
+
+    const denom = k * sumR - sumR2;
+    if (!(denom > 0)) throw new Error('Cochran’s Q denominator is zero — no variability across subjects.');
+
+    const Q = ((k - 1) * (k * sumC2 - total * total)) / denom;
+    const df = k - 1;
+    const p = chi2Sf(Q, df);
+
+    const propRows = cols.map(function (c, j) {
+      return [esc(c.name), colSums[j], fmt(colSums[j] / n, 4)];
+    });
+
+    out.innerHTML =
+      sectionTitle('Cochran’s Q test') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['Subjects (complete cases)', n],
+          ['Binary conditions', k],
+          ['Q statistic', fmt(Q)],
+          ['df', df],
+          ['p-value', pFmt(p)]
+        ]
+      ) +
+      table(['Condition', 'Positive count', 'Proportion'], propRows);
+  }
+
+  /* ---------------- Kendall ---------------- */
+
+  function runKendall(data, out) {
+    const rows = getCompleteRows(data, [val('extraX'), val('extraY')]);
+    if (rows.length < 3) throw new Error('Fewer than 3 complete paired observations.');
+
+    let xs = rows.map(function (r) { return r[0]; });
+    let ys = rows.map(function (r) { return r[1]; });
+
+    let note = '';
+
+    if (xs.length > 2500) {
+      const step = Math.ceil(xs.length / 2500);
+      const nx = [];
+      const ny = [];
+
+      for (let i = 0; i < xs.length; i += step) {
+        nx.push(xs[i]);
+        ny.push(ys[i]);
+      }
+
+      xs = nx;
+      ys = ny;
+      note = 'Large sample: systematic subsample to ' + xs.length + ' observations used for speed.';
+    }
+
+    const res = kendallTau(xs, ys);
+
+    out.innerHTML =
+      sectionTitle('Kendall tau-b correlation') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['n', xs.length],
+          ['Kendall tau-b', fmt(res.tau)],
+          ['Concordant pairs', res.C],
+          ['Discordant pairs', res.D],
+          ['Ties in X', res.tX],
+          ['Ties in Y', res.tY],
+          ['Ties in both', res.tXY],
+          ['z', fmt(res.z)],
+          ['p-value', pFmt(res.p)],
+          ['Note', note || '—']
+        ]
+      );
+  }
+
+  function kendallTau(xs, ys) {
+    const n = xs.length;
+    let C = 0, D = 0, tX = 0, tY = 0, tXY = 0;
+
+    for (let i = 0; i < n; i++) {
+      for (let j = i + 1; j < n; j++) {
+        const dx = xs[i] - xs[j];
+        const dy = ys[i] - ys[j];
+
+        if (dx === 0 && dy === 0) {
+          tXY++;
+        } else if (dx === 0) {
+          tX++;
+        } else if (dy === 0) {
+          tY++;
+        } else if (dx * dy > 0) {
+          C++;
+        } else {
+          D++;
+        }
+      }
+    }
+
+    const n0 = n * (n - 1) / 2;
+    const tx = tX + tXY;
+    const ty = tY + tXY;
+
+    const denom = Math.sqrt((n0 - tx) * (n0 - ty));
+    const tau = denom > 0 ? (C - D) / denom : NaN;
+
+    const varTau = 2 * (2 * n + 5) / (9 * n * (n - 1));
+    const z = tau / Math.sqrt(varTau);
+    const p = 2 * normSf(Math.abs(z));
+
+    return { tau: tau, C: C, D: D, tX: tx, tY: ty, tXY: tXY, z: z, p: p };
+  }
+
+  /* ---------------- Partial correlation ---------------- */
+
+  function runPartial(data, out) {
+    const rows = getCompleteRows(data, [val('extraX'), val('extraY'), val('extraControl')]);
+    if (rows.length < 4) throw new Error('Fewer than 4 complete observations.');
+
+    const x = rows.map(function (r) { return r[0]; });
+    const y = rows.map(function (r) { return r[1]; });
+    const z = rows.map(function (r) { return r[2]; });
+
+    const n = rows.length;
+
+    const rxy = pearson(x, y);
+    const rx = residualize(x, z);
+    const ry = residualize(y, z);
+    const rp = pearson(rx, ry);
+
+    const df = n - 3;
+    const t = rp * Math.sqrt(df / Math.max(1e-12, 1 - rp * rp));
+    const p = tSf2(t, df);
+
+    const zf = Math.atanh(Math.max(-0.999999, Math.min(0.999999, rp)));
+    const se = 1 / Math.sqrt(Math.max(1, n - 3));
+    const ci = [Math.tanh(zf - 1.959964 * se), Math.tanh(zf + 1.959964 * se)];
+
+    out.innerHTML =
+      sectionTitle('Partial correlation') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['n', n],
+          ['Zero-order Pearson r(X,Y)', fmt(rxy)],
+          ['Partial r(X,Y | control)', fmt(rp)],
+          ['df', df],
+          ['t', fmt(t)],
+          ['p-value', pFmt(p)],
+          ['95% CI of partial r', ciText(ci)]
+        ]
+      );
+  }
+
+  function residualize(x, z) {
+    const mx = mean(x);
+    const mz = mean(z);
+
+    let cov = 0;
+    let varZ = 0;
+
+    for (let i = 0; i < x.length; i++) {
+      cov += (z[i] - mz) * (x[i] - mx);
+      varZ += (z[i] - mz) * (z[i] - mz);
+    }
+
+    const b = varZ > 0 ? cov / varZ : 0;
+    const a = mx - b * mz;
+
+    return x.map(function (v, i) {
+      return v - (a + b * z[i]);
+    });
+  }
+
+  /* ---------------- Yuen robust t ---------------- */
+
+  function runYuen(data, out) {
+    const grouped = getGroupedNumeric(data, val('extraOutcome'), val('extraGroup'));
+    if (grouped.levels.length !== 2) {
+      throw new Error('Yuen test requires a grouping variable with exactly 2 levels.');
+    }
+
+    const g1 = grouped.groups[0];
+    const g2 = grouped.groups[1];
+
+    if (g1.length < 6 || g2.length < 6) {
+      throw new Error('Each group needs at least 6 observations for meaningful trimming.');
+    }
+
+    const s1 = yuenStats(g1);
+    const s2 = yuenStats(g2);
+
+    const diff = s1.tm - s2.tm;
+    const se = Math.sqrt(s1.d + s2.d);
+
+    if (!(se > 0)) throw new Error('Standard error is zero; cannot compute Yuen t-test.');
+
+    const t = diff / se;
+    const df = Math.pow(s1.d + s2.d, 2) /
+      (Math.pow(s1.d, 2) / (s1.h - 1) + Math.pow(s2.d, 2) / (s2.h - 1));
+
+    const p = tSf2(t, df);
+    const tc = tPpf(0.975, df);
+    const ci = [diff - tc * se, diff + tc * se];
+
+    out.innerHTML =
+      sectionTitle('Yuen robust two-sample t-test (20% trimming)') +
+      table(
+        ['Group', 'n', 'Trimmed mean', 'Effective h', 'Trimmed observations removed each tail'],
+        [
+          [esc(grouped.levels[0]), g1.length, fmt(s1.tm), s1.h, s1.g],
+          [esc(grouped.levels[1]), g2.length, fmt(s2.tm), s2.h, s2.g]
+        ]
+      ) +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['Difference of trimmed means', fmt(diff)],
+          ['Standard error', fmt(se)],
+          ['t', fmt(t)],
+          ['df', fmt(df, 2)],
+          ['p-value', pFmt(p)],
+          ['95% CI of difference', ciText(ci)]
+        ]
+      );
+  }
+
+  function yuenStats(vals) {
+    const n = vals.length;
+    const sorted = vals.slice().sort(function (a, b) { return a - b; });
+
+    let g = Math.floor(0.2 * n);
+    g = Math.min(g, Math.max(0, Math.floor((n - 2) / 2)));
+
+    const h = n - 2 * g;
+    const trimmed = sorted.slice(g, n - g);
+    const tm = mean(trimmed);
+
+    const wins = sorted.map(function (v, i) {
+      if (i < g) return sorted[g];
+      if (i >= n - g) return sorted[n - 1 - g];
+      return v;
+    });
+
+    const wmean = mean(wins);
+    let ss = 0;
+
+    wins.forEach(function (w) {
+      ss += (w - wmean) * (w - wmean);
+    });
+
+    const sw2 = h > 1 ? ss / (h * (h - 1)) : 0;
+    const d = (n - 1) * sw2 / (h * n);
+
+    return { tm: tm, h: h, d: d, g: g, n: n };
+  }
+
+  /* ---------------- Brown-Forsythe ---------------- */
+
+  function runBrownForsythe(data, out) {
+    const grouped = getGroupedNumeric(data, val('extraOutcome'), val('extraGroup'));
+    if (grouped.levels.length < 2) {
+      throw new Error('Brown-Forsythe requires at least 2 groups.');
+    }
+
+    const groups = grouped.groups.filter(function (g) { return g.length >= 3; });
+    if (groups.length < 2) throw new Error('At least two groups need ≥ 3 observations.');
+
+    const lev = leveneMedian(groups);
+
+    const groupRows = grouped.levels.map(function (lv, i) {
+      const g = grouped.groups[i];
+      return [esc(lv), g.length, fmt(median(g)), fmt(mad(g))];
+    });
+
+    out.innerHTML =
+      sectionTitle('Brown-Forsythe / Levene equality of variances') +
+      table(
+        ['Group', 'n', 'Median', 'MAD'],
+        groupRows
+      ) +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['F', fmt(lev.F)],
+          ['df1', lev.df1],
+          ['df2', lev.df2],
+          ['p-value', pFmt(lev.p)],
+          ['Center', 'median (Brown-Forsythe)']
+        ]
+      );
+  }
+
+  function leveneMedian(groups) {
+    const k = groups.length;
+    const N = groups.reduce(function (a, g) { return a + g.length; }, 0);
+
+    const zGroups = groups.map(function (g) {
+      const med = median(g);
+      return g.map(function (v) { return Math.abs(v - med); });
+    });
+
+    const flat = zGroups.flat();
+    const grand = mean(flat);
+    const groupMeans = zGroups.map(mean);
+
+    let num = 0;
+    let den = 0;
+
+    for (let i = 0; i < k; i++) {
+      const ni = zGroups[i].length;
+      num += ni * Math.pow(groupMeans[i] - grand, 2);
+
+      zGroups[i].forEach(function (v) {
+        den += Math.pow(v - groupMeans[i], 2);
+      });
+    }
+
+    const df1 = k - 1;
+    const df2 = N - k;
+    const F = (num / df1) / (den / df2);
+
+    return { F: F, df1: df1, df2: df2, p: fSf(F, df1, df2) };
+  }
+
+  /* ---------------- Regression diagnostics ---------------- */
+
+  function runRegressionDiagnostics(data, out) {
+    const outcomeName = val('extraOutcome');
+    let predNames = getChecked('extraPredCols');
+
+    predNames = predNames.filter(function (p) { return p !== outcomeName; });
+
+    if (!outcomeName) throw new Error('Select an outcome variable.');
+    if (!predNames.length) throw new Error('Select at least one predictor.');
+
+    const cols = [outcomeName].concat(predNames);
+    const rows = getCompleteRows(data, cols);
+
+    const n = rows.length;
+    const pPred = predNames.length;
+    const pFull = pPred + 1;
+
+    if (n <= pFull + 1) {
+      throw new Error('Not enough observations for the number of predictors.');
+    }
+
+    const y = rows.map(function (r) { return r[0]; });
+    const X = rows.map(function (r) {
+      return [1].concat(r.slice(1));
+    });
+
+    const fit = olsFit(X, y);
+
+    if (!isFinite(fit.R2)) throw new Error('Outcome has no variance.');
+
+    const dfRes = n - pFull;
+    const mse = fit.SSE / dfRes;
+
+    const F = pPred > 0
+      ? (fit.R2 / pPred) / ((1 - fit.R2) / dfRes)
+      : NaN;
+
+    const pF = pPred > 0 ? fSf(F, pPred, dfRes) : NaN;
+
+    const seBeta = fit.inv.map(function (row, i) {
+      return Math.sqrt(Math.max(0, mse * row[i]));
+    });
+
+    const tc = tPpf(0.975, dfRes);
+
+    const coefRows = ['Intercept'].concat(predNames).map(function (nm, i) {
+      const b = fit.beta[i];
+      const se = seBeta[i];
+      const t = b / se;
+      const p = tSf2(t, dfRes);
+
+      return [
+        esc(nm),
+        fmt(b),
+        fmt(se),
+        fmt(t),
+        pFmt(p),
+        ciText([b - tc * se, b + tc * se])
+      ];
+    });
+
+    const vifRows = [];
+
+    if (pPred === 1) {
+      vifRows.push([esc(predNames[0]), '1.000']);
+    } else {
+      for (let j = 1; j <= pPred; j++) {
+        const yj = rows.map(function (r) { return r[j]; });
+        const Xj = rows.map(function (r) {
+          const arr = [1];
+          for (let q = 1; q <= pPred; q++) {
+            if (q !== j) arr.push(r[q]);
+          }
+          return arr;
+        });
+
+        try {
+          const fitJ = olsFit(Xj, yj);
+          const r2j = fitJ.SST > 0 ? 1 - fitJ.SSE / fitJ.SST : NaN;
+          const vif = r2j >= 1 ? Infinity : 1 / Math.max(1e-12, 1 - r2j);
+          vifRows.push([esc(predNames[j - 1]), fmt(vif, 3)]);
+        } catch (e) {
+          vifRows.push([esc(predNames[j - 1]), 'singular']);
+        }
+      }
+    }
+
+    const res = fit.residuals;
+    const skew = skewness(res);
+    const kurt = excessKurtosis(res);
+    const jb = n / 6 * (skew * skew + kurt * kurt / 4);
+    const pJB = chi2Sf(jb, 2);
+
+    let dwNum = 0;
+    for (let i = 1; i < n; i++) {
+      dwNum += Math.pow(res[i] - res[i - 1], 2);
+    }
+    const dw = fit.SSE > 0 ? dwNum / fit.SSE : NaN;
+
+    let highLeverage = 0;
+    let maxCook = 0;
+    const leverageThreshold = 2 * pFull / n;
+
+    for (let i = 0; i < n; i++) {
+      const xi = X[i];
+      let h = 0;
+
+      for (let a = 0; a < pFull; a++) {
+        let s = 0;
+        for (let b = 0; b < pFull; b++) {
+          s += fit.inv[a][b] * xi[b];
+        }
+        h += xi[a] * s;
+      }
+
+      if (h > leverageThreshold) highLeverage++;
+
+      const denom = Math.max(1e-12, 1 - h);
+      const cook = (res[i] * res[i]) / (pFull * mse) * h / (denom * denom);
+      if (cook > maxCook) maxCook = cook;
+    }
+
+    out.innerHTML =
+      sectionTitle('Multiple regression diagnostics') +
+      table(
+        ['Model summary', 'Value'],
+        [
+          ['n', n],
+          ['Predictors', pPred],
+          ['R²', fmt(fit.R2)],
+          ['Adjusted R²', fmt(1 - (1 - fit.R2) * (n - 1) / dfRes)],
+          ['Model F', fmt(F)],
+          ['Model p', pFmt(pF)],
+          ['Residual standard error', fmt(Math.sqrt(mse))]
+        ]
+      ) +
+      sectionTitle('Coefficients') +
+      table(
+        ['Term', 'β', 'SE', 't', 'p', '95% CI'],
+        coefRows
+      ) +
+      sectionTitle('Multicollinearity (VIF)') +
+      table(['Predictor', 'VIF'], vifRows) +
+      sectionTitle('Residual and influence diagnostics') +
+      table(
+        ['Diagnostic', 'Value', 'Interpretation'],
+        [
+          ['Jarque-Bera residual normality', fmt(jb) + ' (p = ' + pFmt(pJB) + ')', pJB < 0.05 ? 'residuals non-normal' : 'no strong residual non-normality'],
+          ['Durbin-Watson', fmt(dw), dw < 1.5 ? 'possible positive autocorrelation' : dw > 2.5 ? 'possible negative autocorrelation' : 'acceptable'],
+          ['High leverage points', highLeverage + ' / ' + n, 'threshold = 2p/n'],
+          ['Max Cook’s distance', fmt(maxCook), maxCook > 1 ? 'potentially influential point' : maxCook > 0.5 ? 'moderate influence' : 'no extreme influence']
+        ]
+      );
+  }
+
+  /* ---------------- data helpers ---------------- */
+
+  function getCompleteRows(data, names) {
+    const cols = names.map(function (nm) {
+      const c = colByName(data, nm);
+      if (!c) throw new Error('Column not found: ' + nm);
+      return c;
+    });
+
+    const out = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const row = [];
+      let ok = true;
+
+      for (let j = 0; j < cols.length; j++) {
+        const v = cols[j].values[i];
+        if (typeof v === 'number' && isFinite(v)) {
+          row.push(v);
+        } else {
+          ok = false;
+          break;
+        }
+      }
+
+      if (ok) out.push(row);
+    }
+
+    return out;
+  }
+
+  function getGroupedNumeric(data, outcomeName, groupName) {
+    const oc = colByName(data, outcomeName);
+    const gc = colByName(data, groupName);
+
+    if (!oc || !gc) throw new Error('Outcome or group column not found.');
+
+    const map = new Map();
+    const levels = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const y = oc.values[i];
+      const g = gc.values[i];
+
+      if (typeof y === 'number' && isFinite(y) && g != null) {
+        const key = String(g);
+
+        if (!map.has(key)) {
+          map.set(key, []);
+          levels.push(key);
+        }
+
+        map.get(key).push(y);
+      }
+    }
+
+    return {
+      levels: levels,
+      groups: levels.map(function (lv) { return map.get(lv); })
+    };
+  }
+
+  function uniqueInOrder(values) {
+    const seen = [];
+
+    values.forEach(function (v) {
+      if (v == null) return;
+      const exists = seen.some(function (s) { return String(s) === String(v); });
+      if (!exists) seen.push(v);
+    });
+
+    return seen;
+  }
+
+  function defaultPositive(col) {
+    const u = uniqueInOrder(col.values);
+    if (!u.length) return null;
+
+    if (col.type === 'numeric') {
+      const nums = u.filter(function (v) { return typeof v === 'number'; });
+      if (nums.length) return Math.max.apply(null, nums);
+      return u[u.length - 1];
+    }
+
+    return u.length >= 2 ? u[1] : u[0];
+  }
+
+  function binaryValue(v, positive) {
+    if (v == null) return null;
+    if (positive == null) return null;
+
+    if (typeof v === 'number' && typeof positive === 'number') {
+      return v === positive ? 1 : 0;
+    }
+
+    return String(v) === String(positive) ? 1 : 0;
+  }
+
+  /* ---------------- basic math/stats ---------------- */
+
+  function mean(a) {
+    if (!a.length) return NaN;
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i];
+    return s / a.length;
+  }
+
+  function median(a) {
+    const s = a.slice().sort(function (x, y) { return x - y; });
+    const n = s.length;
+    if (!n) return NaN;
+    const m = Math.floor(n / 2);
+    return n % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  function mad(a) {
+    const med = median(a);
+    return median(a.map(function (v) { return Math.abs(v - med); }));
+  }
+
+  function pearson(x, y) {
+    const n = x.length;
+    const mx = mean(x);
+    const my = mean(y);
+
+    let sxy = 0, sxx = 0, syy = 0;
+
+    for (let i = 0; i < n; i++) {
+      const dx = x[i] - mx;
+      const dy = y[i] - my;
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+
+    const den = Math.sqrt(sxx * syy);
+    return den > 0 ? sxy / den : NaN;
+  }
+
+  function skewness(x) {
+    const n = x.length;
+    const m = mean(x);
+
+    let m2 = 0, m3 = 0;
+
+    x.forEach(function (v) {
+      const d = v - m;
+      m2 += d * d;
+      m3 += d * d * d;
+    });
+
+    m2 /= n;
+    m3 /= n;
+
+    if (m2 <= 0) return 0;
+    return m3 / Math.pow(m2, 1.5);
+  }
+
+  function excessKurtosis(x) {
+    const n = x.length;
+    if (n < 4) return NaN;
+
+    const m = mean(x);
+    let m2 = 0, m4 = 0;
+
+    x.forEach(function (v) {
+      const d = v - m;
+      m2 += d * d;
+      m4 += d * d * d * d;
+    });
+
+    m2 /= n;
+    m4 /= n;
+
+    if (m2 <= 0) return NaN;
+
+    const b2 = m4 / (m2 * m2);
+    const num = n * (n + 1) * (b2 - 3) + 6;
+    const den = (n - 1) * (n - 2) * (n - 3);
+
+    return num / den;
+  }
+
+  function olsFit(X, y) {
+    const n = X.length;
+    const p = X[0].length;
+
+    const XtX = Array.from({ length: p }, function () { return new Array(p).fill(0); });
+    const Xty = new Array(p).fill(0);
+
+    for (let i = 0; i < n; i++) {
+      for (let a = 0; a < p; a++) {
+        Xty[a] += X[i][a] * y[i];
+        for (let b = a; b < p; b++) {
+          XtX[a][b] += X[i][a] * X[i][b];
+        }
+      }
+    }
+
+    for (let a = 0; a < p; a++) {
+      for (let b = 0; b < a; b++) {
+        XtX[a][b] = XtX[b][a];
+      }
+    }
+
+    let inv;
+    let ridgeNote = '';
+
+    try {
+      inv = invertMatrix(XtX);
+    } catch (e) {
+      const XtX2 = XtX.map(function (row, i) {
+        const r = row.slice();
+        r[i] += 1e-8;
+        return r;
+      });
+      inv = invertMatrix(XtX2);
+      ridgeNote = 'tiny ridge added due to near-singular design';
+    }
+
+    const beta = matVec(inv, Xty);
+    const yhat = matVec(X, beta);
+
+    const residuals = y.map(function (v, i) { return v - yhat[i]; });
+
+    const SSE = residuals.reduce(function (a, b) { return a + b * b; }, 0);
+    const ybar = mean(y);
+    const SST = y.reduce(function (a, v) { return a + (v - ybar) * (v - ybar); }, 0);
+
+    const R2 = SST > 0 ? 1 - SSE / SST : NaN;
+
+    return {
+      n: n,
+      p: p,
+      beta: beta,
+      inv: inv,
+      residuals: residuals,
+      yhat: yhat,
+      SSE: SSE,
+      SST: SST,
+      R2: R2,
+      ridgeNote: ridgeNote
+    };
+  }
+
+  function matVec(A, v) {
+    return A.map(function (row) {
+      let s = 0;
+      for (let j = 0; j < row.length; j++) s += row[j] * v[j];
+      return s;
+    });
+  }
+
+  function invertMatrix(A) {
+    const n = A.length;
+    const M = A.map(function (row, i) {
+      return row.slice().concat(Array.from({ length: n }, function (_, j) { return i === j ? 1 : 0; }));
+    });
+
+    for (let col = 0; col < n; col++) {
+      let piv = col;
+
+      for (let r = col + 1; r < n; r++) {
+        if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+      }
+
+      if (Math.abs(M[piv][col]) < 1e-12) {
+        throw new Error('singular matrix');
+      }
+
+      const tmp = M[col];
+      M[col] = M[piv];
+      M[piv] = tmp;
+
+      const div = M[col][col];
+
+      for (let j = 0; j < 2 * n; j++) {
+        M[col][j] /= div;
+      }
+
+      for (let r = 0; r < n; r++) {
+        if (r === col) continue;
+
+        const f = M[r][col];
+        if (f === 0) continue;
+
+        for (let j = 0; j < 2 * n; j++) {
+          M[r][j] -= f * M[col][j];
+        }
+      }
+    }
+
+    return M.map(function (row) { return row.slice(n); });
+  }
+
+  /* ---------------- special functions ---------------- */
+
+  function lgamma(x) {
+    const c = [
+      76.18009172947146,
+      -86.50532032941678,
+      24.01409824083091,
+      -1.231739572450155,
+      0.001208650973866179,
+      -0.000005395239384953
+    ];
+
+    let y = x;
+    let tmp = x + 5.5;
+    tmp -= (x + 0.5) * Math.log(tmp);
+
+    let ser = 1.000000000190015;
+
+    for (let j = 0; j < 6; j++) {
+      ser += c[j] / ++y;
+    }
+
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+
+  function gser(a, x) {
+    if (x <= 0) return 0;
+
+    let ap = a;
+    let sum = 1 / a;
+    let del = sum;
+
+    for (let n = 1; n < 500; n++) {
+      ap += 1;
+      del *= x / ap;
+      sum += del;
+
+      if (Math.abs(del) < Math.abs(sum) * 1e-14) break;
+    }
+
+    return sum * Math.exp(-x + a * Math.log(x) - lgamma(a));
+  }
+
+  function gcf(a, x) {
+    let b = x + 1 - a;
+    let c = 1 / 1e-300;
+    let d = 1 / b;
+    let h = d;
+
+    for (let i = 1; i < 300; i++) {
+      const an = -i * (i - a);
+      b += 2;
+
+      d = an * d + b;
+      if (Math.abs(d) < 1e-300) d = 1e-300;
+
+      c = b + an / c;
+      if (Math.abs(c) < 1e-300) c = 1e-300;
+
+      d = 1 / d;
+      const del = d * c;
+      h *= del;
+
+      if (Math.abs(del - 1) < 1e-14) break;
+    }
+
+    return Math.exp(-x + a * Math.log(x) - lgamma(a)) * h;
+  }
+
+  function gammq(a, x) {
+    if (x <= 0) return 1;
+    if (a <= 0) return NaN;
+    return x < a + 1 ? 1 - gser(a, x) : gcf(a, x);
+  }
+
+  function chi2Sf(x, df) {
+    if (!isFinite(x) || x <= 0) return 1;
+    if (df <= 0) return NaN;
+    return gammq(df / 2, x / 2);
+  }
+
+  function betacf(a, b, x) {
+    const qab = a + b;
+    const qap = a + 1;
+    const qam = a - 1;
+
+    let c = 1;
+    let d = 1 - qab * x / qap;
+
+    if (Math.abs(d) < 1e-300) d = 1e-300;
+    d = 1 / d;
+
+    let h = d;
+
+    for (let m = 1; m <= 200; m++) {
+      const m2 = 2 * m;
+
+      let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+
+      d = 1 + aa * d;
+      if (Math.abs(d) < 1e-300) d = 1e-300;
+
+      c = 1 + aa / c;
+      if (Math.abs(c) < 1e-300) c = 1e-300;
+
+      d = 1 / d;
+      h *= d * c;
+
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+
+      d = 1 + aa * d;
+      if (Math.abs(d) < 1e-300) d = 1e-300;
+
+      c = 1 + aa / c;
+      if (Math.abs(c) < 1e-300) c = 1e-300;
+
+      d = 1 / d;
+
+      const del = d * c;
+      h *= del;
+
+      if (Math.abs(del - 1) < 1e-14) break;
+    }
+
+    return h;
+  }
+
+  function betainc(a, b, x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+
+    const bt = Math.exp(
+      lgamma(a + b) - lgamma(a) - lgamma(b) +
+      a * Math.log(x) + b * Math.log(1 - x)
+    );
+
+    return x < (a + 1) / (a + b + 2)
+      ? bt * betacf(a, b, x) / a
+      : 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+
+  function tSf2(t, df) {
+    if (!isFinite(t) || df <= 0) return NaN;
+    return betainc(df / 2, 0.5, df / (df + t * t));
+  }
+
+  function tCdf(t, df) {
+    if (!isFinite(t)) return NaN;
+    const p = 0.5 * tSf2(Math.abs(t), df);
+    return t >= 0 ? 1 - p : p;
+  }
+
+  function tPpf(p, df) {
+    if (p <= 0) return -Infinity;
+    if (p >= 1) return Infinity;
+
+    let lo = -100;
+    let hi = 100;
+
+    while (tCdf(lo, df) > p && lo > -1e6) lo *= 2;
+    while (tCdf(hi, df) < p && hi < 1e6) hi *= 2;
+
+    for (let i = 0; i < 120; i++) {
+      const mid = (lo + hi) / 2;
+      if (tCdf(mid, df) < p) lo = mid;
+      else hi = mid;
+    }
+
+    return (lo + hi) / 2;
+  }
+
+  function fSf(f, d1, d2) {
+    if (!isFinite(f) || f <= 0) return 1;
+    const x = d1 * f / (d1 * f + d2);
+    return betainc(d2 / 2, d1 / 2, 1 - x);
+  }
+
+  function erf(x) {
+    const sign = x < 0 ? -1 : 1;
+    x = Math.abs(x);
+
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+
+    return sign * y;
+  }
+
+  function normSf(z) {
+    return 1 - 0.5 * (1 + erf(z / Math.SQRT2));
+  }
+
+  function binomPmf(k, n, p) {
+    if (k < 0 || k > n) return 0;
+
+    return Math.exp(
+      lgamma(n + 1) - lgamma(k + 1) - lgamma(n - k + 1) +
+      k * Math.log(p) + (n - k) * Math.log(1 - p)
+    );
+  }
+
+  function binomTwoSided(k, n, p) {
+    const pObs = binomPmf(k, n, p);
+    let s = 0;
+
+    for (let i = 0; i <= n; i++) {
+      const pi = binomPmf(i, n, p);
+      if (pi <= pObs * (1 + 1e-12)) s += pi;
+    }
+
+    return Math.min(1, s);
+  }
+
+  /* ---------------- formatting ---------------- */
+
+  function fmt(v, d) {
+    if (BS && BS.fmt) return BS.fmt(v, d == null ? 4 : d);
+    return isFinite(v) ? Number(v).toFixed(d == null ? 4 : d) : '—';
+  }
+
+  function pFmt(p) {
+    if (BS && BS.pFmt) return BS.pFmt(p);
+    if (!isFinite(p)) return '—';
+    if (p < 0.0001) return '< 0.0001';
+    return p.toFixed(4);
+  }
+
+  function ciText(ci) {
+    if (!ci || !isFinite(ci[0]) || !isFinite(ci[1])) return '—';
+    return '[' + fmt(ci[0], 4) + ', ' + fmt(ci[1], 4) + ']';
+  }
+
+  function esc(s) {
+    return BW.esc(s);
+  }
+
+  function sectionTitle(text) {
+    return '<div class="sect-h"><h3>' + esc(text) + '</h3></div>';
+  }
+
+  function table(headers, rows) {
+    let html = '<div class="tblwrap"><table class="tbl"><thead><tr>';
+
+    headers.forEach(function (h, i) {
+      html += '<th' + (i > 0 ? ' class="num"' : '') + '>' + h + '</th>';
+    });
+
+    html += '</tr></thead><tbody>';
+
+    rows.forEach(function (r) {
+      html += '<tr>';
+      r.forEach(function (cell, i) {
+        html += '<td' + (i > 0 ? ' class="num"' : '') + '>' + cell + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  boot();
+})();
+</script>
+<!-- ================= END Chunk-2 ================= -->
+
+<!-- ================= BEGIN Chunk-3 ================= -->
+<script>
+(function () {
+  'use strict';
+
+  if (window.__BW_P7_LOADED) return;
+  window.__BW_P7_LOADED = true;
+
+  let BW = null;
+  let BS = null;
+
+  function boot() {
+    BW = window.__BW;
+    BS = window.BS;
+
+    if (!BW || !BS) {
+      setTimeout(boot, 80);
+      return;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
+  }
+
+  function start() {
+    injectUI();
+    bindUI();
+    observeData();
+    refreshColumns();
+    updateVisibility();
+  }
+
+  function injectUI() {
+    const tabs = document.getElementById('tabs');
+    if (!tabs) return;
+
+    if (!document.querySelector('.tab[data-tab="phase7"]')) {
+      const btn = document.createElement('button');
+      btn.className = 'tab';
+      btn.dataset.tab = 'phase7';
+      btn.innerHTML = '<b>P7</b> Advanced';
+
+      const summaryBtn = tabs.querySelector('[data-tab="summary"]');
+      if (summaryBtn) tabs.insertBefore(btn, summaryBtn);
+      else tabs.appendChild(btn);
+
+      btn.addEventListener('click', function () {
+        refreshColumns();
+        updateVisibility();
+        BW.switchTab('phase7');
+      });
+    }
+
+    if (document.getElementById('tab-phase7')) return;
+
+    const pane = document.createElement('section');
+    pane.id = 'tab-phase7';
+    pane.className = 'tabpane';
+
+    pane.innerHTML = `
+      <article class="card">
+        <div class="card-head">
+          <h3>P7 · Advanced diagnostics, agreement &amp; ROC</h3>
+          <span class="badge info">Kappa · ICC · ROC/AUC · BCa · Nelson-Aalen · Friedman post-hoc</span>
+        </div>
+
+        <p class="verdict-line">
+          Uses the currently loaded dataset. Missing values are excluded analysis-by-analysis.
+          For ROC, Column A is the binary outcome and Column B is the numeric score.
+        </p>
+
+        <div class="two-col">
+          <div>
+            <label class="lbl">Analysis</label>
+            <select id="advMethod">
+              <option value="kappa">Cohen's kappa (two raters)</option>
+              <option value="icc">ICC reliability (wide numeric columns)</option>
+              <option value="roc">ROC / AUC</option>
+              <option value="bca">Bootstrap BCa interval</option>
+              <option value="nelson">Nelson-Aalen cumulative hazard</option>
+              <option value="friedmanPostHoc">Friedman pairwise post-hoc</option>
+              <option value="rmDiagnostics">Repeated-measures diagnostics</option>
+            </select>
+
+            <div id="advPositiveWrap" style="display:none">
+              <label class="lbl">Positive level (optional)</label>
+              <input type="text" id="advPositive" placeholder="e.g., 1, Yes, Event">
+            </div>
+
+            <div id="advABWrap" style="display:none">
+              <label class="lbl">Column A</label>
+              <select id="advColA"></select>
+
+              <label class="lbl">Column B</label>
+              <select id="advColB"></select>
+            </div>
+
+            <div id="advWideWrap" style="display:none">
+              <label class="lbl">Numeric columns (wide format)</label>
+              <div id="advWideCols" class="checks"></div>
+            </div>
+
+            <div id="advStatWrap" style="display:none">
+              <label class="lbl">Bootstrap statistic</label>
+              <select id="advStat">
+                <option value="mean">Mean</option>
+                <option value="median">Median</option>
+                <option value="sd">SD</option>
+                <option value="trimmed">10% trimmed mean</option>
+              </select>
+
+              <label class="lbl">Bootstrap replicates</label>
+              <input type="number" id="advBootB" min="200" max="5000" step="100" value="2000">
+            </div>
+
+            <div id="advSurvWrap" style="display:none">
+              <label class="lbl">Time column (numeric)</label>
+              <select id="advTime"></select>
+
+              <label class="lbl">Event column</label>
+              <select id="advEvent"></select>
+
+              <label class="lbl">Optional group column</label>
+              <select id="advGroup"></select>
+            </div>
+
+            <div class="row">
+              <button id="btnAdvRefresh" class="btn ghost" type="button">Refresh columns</button>
+              <button id="btnAdvRun" class="btn primary" type="button">Run selected analysis</button>
+            </div>
+          </div>
+
+          <div>
+            <div class="alert info">
+              <b>Quick guide</b><br>
+              · Cohen’s kappa: two categorical/rater columns.<br>
+              · ICC: select ≥ 2 numeric columns representing raters/conditions.<br>
+              · ROC/AUC: Column A = binary outcome, Column B = numeric score.<br>
+              · BCa: bootstrap bias-corrected accelerated CI for one numeric column.<br>
+              · Nelson-Aalen: cumulative hazard for time/event data.<br>
+              · Friedman post-hoc: pairwise signed-rank tests with Holm correction.<br>
+              · RM diagnostics: condition descriptives, correlations, Cronbach alpha.
+            </div>
+          </div>
+        </div>
+
+        <div id="advStatus" style="margin-top:12px"></div>
+        <div id="advOut" style="margin-top:12px"></div>
+      </article>
+    `;
+
+    const main = document.querySelector('main');
+    if (main) main.appendChild(pane);
+  }
+
+  function bindUI() {
+    const btnRun = document.getElementById('btnAdvRun');
+    const btnRefresh = document.getElementById('btnAdvRefresh');
+    const method = document.getElementById('advMethod');
+
+    if (btnRun) btnRun.addEventListener('click', runAdvanced);
+    if (btnRefresh) btnRefresh.addEventListener('click', refreshColumns);
+    if (method) method.addEventListener('change', updateVisibility);
+  }
+
+  function observeData() {
+    const target = document.getElementById('dataPreview');
+    if (!target || !window.MutationObserver) return;
+
+    const obs = new MutationObserver(function () {
+      setTimeout(refreshColumns, 120);
+    });
+
+    obs.observe(target, { childList: true, subtree: true });
+  }
+
+  function updateVisibility() {
+    const m = document.getElementById('advMethod');
+    if (!m) return;
+
+    const method = m.value;
+
+    const wrappers = [
+      'advPositiveWrap',
+      'advABWrap',
+      'advWideWrap',
+      'advStatWrap',
+      'advSurvWrap'
+    ];
+
+    const map = {
+      kappa: ['advABWrap'],
+      icc: ['advWideWrap'],
+      roc: ['advABWrap', 'advPositiveWrap'],
+      bca: ['advABWrap', 'advStatWrap'],
+      nelson: ['advSurvWrap'],
+      friedmanPostHoc: ['advWideWrap'],
+      rmDiagnostics: ['advWideWrap']
+    };
+
+    const show = map[method] || [];
+
+    wrappers.forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el) el.style.display = show.includes(id) ? 'block' : 'none';
+    });
+  }
+
+  function refreshColumns() {
+    const data = BW.state && BW.state.data;
+    if (!data) return;
+
+    const prev = getPrevSelection();
+
+    const all = data.columns;
+    const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+    const categorical = data.columns.filter(function (c) { return c.type === 'categorical'; });
+
+    fillSelect('advColA', all, prev.colA);
+    fillSelect('advColB', all, prev.colB);
+
+    fillSelect('advTime', numeric, prev.time);
+    fillSelect('advEvent', all, prev.event);
+    fillSelect('advGroup', categorical, prev.group);
+
+    fillChecks('advWideCols', numeric, prev.wide, 3);
+  }
+
+  function getPrevSelection() {
+    return {
+      colA: val('advColA'),
+      colB: val('advColB'),
+      time: val('advTime'),
+      event: val('advEvent'),
+      group: val('advGroup'),
+      wide: getChecked('advWideCols')
+    };
+  }
+
+  function val(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+  }
+
+  function getChecked(id) {
+    const box = document.getElementById(id);
+    if (!box) return [];
+
+    return Array.prototype.map.call(
+      box.querySelectorAll('input[type="checkbox"]:checked'),
+      function (inp) { return inp.value; }
+    );
+  }
+
+  function fillSelect(id, cols, selected) {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+
+    const prev = selected !== undefined ? selected : sel.value;
+
+    let html = '';
+    cols.forEach(function (c) {
+      html += '<option value="' + BW.esc(c.name) + '">' + BW.esc(c.name) +
+        ' (' + (c.type === 'numeric' ? 'num' : 'cat') + ')</option>';
+    });
+
+    sel.innerHTML = html || '<option value="">No columns</option>';
+
+    if (prev && cols.some(function (c) { return c.name === prev; })) {
+      sel.value = prev;
+    } else if (cols.length) {
+      sel.value = cols[0].name;
+    } else {
+      sel.value = '';
+    }
+  }
+
+  function fillChecks(id, cols, selected, defaultCount) {
+    const box = document.getElementById(id);
+    if (!box) return;
+
+    const prev = selected && selected.length ? selected : getChecked(id);
+    const usePrev = prev.length > 0;
+
+    if (!cols.length) {
+      box.innerHTML = '<span class="muted small">No suitable columns.</span>';
+      return;
+    }
+
+    box.innerHTML = cols.map(function (c, idx) {
+      const checked = usePrev ? prev.includes(c.name) : idx < (defaultCount || 3);
+      return '<label><input type="checkbox" value="' + BW.esc(c.name) + '" ' +
+        (checked ? 'checked' : '') + '> ' + BW.esc(c.name) + '</label>';
+    }).join('');
+  }
+
+  function colByName(data, name) {
+    return data.columns.find(function (c) { return c.name === name; });
+  }
+
+  function runAdvanced() {
+    const out = document.getElementById('advOut');
+    const status = document.getElementById('advStatus');
+
+    try {
+      const data = BW.state && BW.state.data;
+      if (!data) throw new Error('No dataset loaded.');
+
+      const method = val('advMethod');
+
+      status.innerHTML = '';
+      out.innerHTML = '';
+
+      if (method === 'kappa') return runKappa(data, out);
+      if (method === 'icc') return runICC(data, out);
+      if (method === 'roc') return runROC(data, out);
+      if (method === 'bca') return runBCA(data, out);
+      if (method === 'nelson') return runNelson(data, out);
+      if (method === 'friedmanPostHoc') return runFriedmanPostHoc(data, out);
+      if (method === 'rmDiagnostics') return runRMDiagnostics(data, out);
+
+      throw new Error('Unknown advanced method.');
+    } catch (err) {
+      if (out) {
+        out.innerHTML = '<div class="alert bad">' + BW.esc(err.message || String(err)) + '</div>';
+      }
+    }
+  }
+
+  /* ---------------- Cohen's kappa ---------------- */
+
+  function runKappa(data, out) {
+    const cA = colByName(data, val('advColA'));
+    const cB = colByName(data, val('advColB'));
+
+    if (!cA || !cB) throw new Error('Select two columns for Cohen’s kappa.');
+    if (cA.name === cB.name) throw new Error('Choose two different columns.');
+
+    const pairs = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const a = cA.values[i];
+      const b = cB.values[i];
+      if (a != null && b != null) pairs.push([String(a), String(b)]);
+    }
+
+    if (pairs.length < 10) throw new Error('Fewer than 10 complete paired ratings.');
+
+    const levels = unionLevels(pairs);
+    const kappa = computeKappa(pairs, levels);
+
+    const B = pairs.length <= 1200 ? 1000 : 399;
+    const rng = mulberry(20261107);
+
+    const boots = [];
+
+    for (let b = 0; b < B; b++) {
+      const sample = [];
+      for (let i = 0; i < pairs.length; i++) {
+        sample.push(pairs[Math.floor(rng() * pairs.length)]);
+      }
+      const kb = computeKappa(sample, levels);
+      if (isFinite(kb)) boots.push(kb);
+    }
+
+    boots.sort(function (a, b) { return a - b; });
+
+    const ci = [
+      quantileSorted(boots, 0.025),
+      quantileSorted(boots, 0.975)
+    ];
+
+    const se = sd(boots);
+    const z = se > 0 ? kappa / se : NaN;
+    const p = isFinite(z) ? 2 * normSf(Math.abs(z)) : NaN;
+
+    const counts = confusionCounts(pairs, levels);
+
+    out.innerHTML =
+      sectionTitle('Cohen’s kappa agreement') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['Complete paired ratings', pairs.length],
+          ['Levels', levels.length],
+          ['Observed agreement (Po)', fmt(counts.po)],
+          ['Expected agreement (Pe)', fmt(counts.pe)],
+          ['Cohen’s kappa', fmt(kappa)],
+          ['Bootstrap SE', fmt(se)],
+          ['95% bootstrap CI', ciText(ci)],
+          ['Approx. z', fmt(z)],
+          ['Approx. p', pFmt(p)],
+          ['Bootstrap replicates', B]
+        ]
+      ) +
+      sectionTitle('Confusion matrix') +
+      confusionTable(levels, counts.matrix);
+  }
+
+  function unionLevels(pairs) {
+    const levels = [];
+
+    pairs.forEach(function (p) {
+      if (!levels.includes(p[0])) levels.push(p[0]);
+      if (!levels.includes(p[1])) levels.push(p[1]);
+    });
+
+    return levels;
+  }
+
+  function confusionCounts(pairs, levels) {
+    const n = pairs.length;
+    const matrix = levels.map(function () {
+      return new Array(levels.length).fill(0);
+    });
+
+    pairs.forEach(function (p) {
+      const i = levels.indexOf(p[0]);
+      const j = levels.indexOf(p[1]);
+      if (i >= 0 && j >= 0) matrix[i][j]++;
+    });
+
+    const rowTotals = matrix.map(function (r) { return r.reduce(function (a, b) { return a + b; }, 0); });
+    const colTotals = levels.map(function (_, j) {
+      return matrix.reduce(function (a, r) { return a + r[j]; }, 0);
+    });
+
+    let po = 0;
+    for (let i = 0; i < levels.length; i++) po += matrix[i][i];
+    po /= n;
+
+    let pe = 0;
+    for (let i = 0; i < levels.length; i++) pe += (rowTotals[i] / n) * (colTotals[i] / n);
+
+    return { matrix: matrix, po: po, pe: pe };
+  }
+
+  function computeKappa(pairs, levels) {
+    const c = confusionCounts(pairs, levels);
+    if (c.pe >= 1) return NaN;
+    return (c.po - c.pe) / (1 - c.pe);
+  }
+
+  function confusionTable(levels, matrix) {
+    let html = '<div class="tblwrap"><table class="tbl"><thead><tr><th>Rater A \\ Rater B</th>';
+
+    levels.forEach(function (l) {
+      html += '<th class="num">' + esc(l) + '</th>';
+    });
+
+    html += '</tr></thead><tbody>';
+
+    levels.forEach(function (l, i) {
+      html += '<tr><td>' + esc(l) + '</td>';
+      levels.forEach(function (_, j) {
+        html += '<td class="num">' + matrix[i][j] + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  /* ---------------- ICC ---------------- */
+
+  function runICC(data, out) {
+    const names = getChecked('advWideCols');
+    if (names.length < 2) throw new Error('Select at least 2 numeric columns for ICC.');
+
+    const M = getWideMatrix(data, names);
+    if (M.length < 5) throw new Error('Fewer than 5 complete cases across selected columns.');
+
+    const n = M.length;
+    const k = names.length;
+
+    let grand = 0;
+    M.forEach(function (row) {
+      row.forEach(function (v) { grand += v; });
+    });
+    grand /= n * k;
+
+    const rowMeans = M.map(function (row) { return mean(row); });
+    const colMeans = new Array(k).fill(0);
+
+    for (let j = 0; j < k; j++) {
+      let s = 0;
+      for (let i = 0; i < n; i++) s += M[i][j];
+      colMeans[j] = s / n;
+    }
+
+    let ssRows = 0;
+    rowMeans.forEach(function (m) { ssRows += k * Math.pow(m - grand, 2); });
+
+    let ssCols = 0;
+    colMeans.forEach(function (m) { ssCols += n * Math.pow(m - grand, 2); });
+
+    let ssTotal = 0;
+    M.forEach(function (row) {
+      row.forEach(function (v) { ssTotal += Math.pow(v - grand, 2); });
+    });
+
+    let ssError = ssTotal - ssRows - ssCols;
+    if (ssError < 0) ssError = 0;
+
+    const dfRows = n - 1;
+    const dfCols = k - 1;
+    const dfError = (n - 1) * (k - 1);
+
+    const MSR = ssRows / dfRows;
+    const MSC = ssCols / dfCols;
+    const MSE = ssError / dfError;
+
+    const icc21 = (MSR - MSE) / (MSR + (k - 1) * MSE + k * (MSC - MSE) / n);
+    const icc31 = (MSR - MSE) / (MSR + (k - 1) * MSE);
+    const icc2k = (MSR - MSE) / (MSR + (MSC - MSE) / n);
+    const icc3k = (MSR - MSE) / MSR;
+
+    const alpha = cronbachAlpha(M);
+
+    let ci31 = [NaN, NaN];
+
+    try {
+      const F_L = fPpf(0.025, dfRows, dfError);
+      const F_U = fPpf(0.975, dfRows, dfError);
+
+      ci31 = [
+        (MSR / F_U - MSE) / (MSR / F_U + (k - 1) * MSE),
+        (MSR / F_L - MSE) / (MSR / F_L + (k - 1) * MSE)
+      ];
+    } catch (e) {
+      ci31 = [NaN, NaN];
+    }
+
+    out.innerHTML =
+      sectionTitle('Intraclass correlation coefficients') +
+      table(
+        ['Model', 'ICC'],
+        [
+          ['ICC(2,1) two-way random, absolute agreement', fmt(icc21)],
+          ['ICC(3,1) two-way mixed, consistency', fmt(icc31)],
+          ['ICC(2,k) average measures, absolute', fmt(icc2k)],
+          ['ICC(3,k) average measures, consistency', fmt(icc3k)],
+          ['Cronbach’s alpha', fmt(alpha)]
+        ]
+      ) +
+      table(
+        ['ANOVA component', 'Value'],
+        [
+          ['Subjects (rows)', n],
+          ['Raters / conditions (columns)', k],
+          ['MS subjects', fmt(MSR)],
+          ['MS raters', fmt(MSC)],
+          ['MS error', fmt(MSE)],
+          ['ICC(3,1) 95% CI', ciText(ci31)]
+        ]
+      );
+  }
+
+  function cronbachAlpha(M) {
+    const n = M.length;
+    const k = M[0].length;
+
+    const itemVars = new Array(k).fill(0);
+
+    for (let j = 0; j < k; j++) {
+      const col = M.map(function (r) { return r[j]; });
+      itemVars[j] = variance(col, 1);
+    }
+
+    const totals = M.map(function (r) { return r.reduce(function (a, b) { return a + b; }, 0); });
+    const varTotal = variance(totals, 1);
+
+    if (!(varTotal > 0)) return NaN;
+
+    return (k / (k - 1)) * (1 - itemVars.reduce(function (a, b) { return a + b; }, 0) / varTotal);
+  }
+
+  function getWideMatrix(data, names) {
+    const cols = names.map(function (nm) {
+      const c = colByName(data, nm);
+      if (!c) throw new Error('Column not found: ' + nm);
+      return c;
+    });
+
+    const out = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const row = [];
+      let ok = true;
+
+      for (let j = 0; j < cols.length; j++) {
+        const v = cols[j].values[i];
+        if (typeof v === 'number' && isFinite(v)) row.push(v);
+        else {
+          ok = false;
+          break;
+        }
+      }
+
+      if (ok) out.push(row);
+    }
+
+    return out;
+  }
+
+  /* ---------------- ROC / AUC ---------------- */
+
+  function runROC(data, out) {
+    const outcomeCol = colByName(data, val('advColA'));
+    const scoreCol = colByName(data, val('advColB'));
+
+    if (!outcomeCol || !scoreCol) throw new Error('Select outcome and score columns.');
+
+    const positiveText = val('advPositive').trim();
+
+    const yRaw = [];
+    const scores = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const y = outcomeCol.values[i];
+      const s = scoreCol.values[i];
+
+      if (y == null || typeof s !== 'number' || !isFinite(s)) continue;
+
+      yRaw.push(y);
+      scores.push(s);
+    }
+
+    if (yRaw.length < 10) throw new Error('Fewer than 10 complete outcome-score observations.');
+
+    const positive = positiveText ? positiveText : defaultPositive(yRaw);
+    const y = yRaw.map(function (v) { return String(v) === String(positive) ? 1 : 0; });
+
+    const n1 = y.reduce(function (a, b) { return a + b; }, 0);
+    const n0 = y.length - n1;
+
+    if (n1 === 0 || n0 === 0) throw new Error('Outcome must have both positive and negative cases.');
+
+    const ranks = rankAverage(scores);
+
+    let R1 = 0;
+    for (let i = 0; i < y.length; i++) {
+      if (y[i] === 1) R1 += ranks[i];
+    }
+
+    const U = R1 - n1 * (n1 + 1) / 2;
+    const auc = U / (n1 * n0);
+
+    let se;
+
+    if (n1 * n0 <= 500000) {
+      const posScores = scores.filter(function (_, i) { return y[i] === 1; });
+      const negScores = scores.filter(function (_, i) { return y[i] === 0; });
+
+      const V10 = posScores.map(function (s) {
+        let c = 0;
+        negScores.forEach(function (t) {
+          if (s > t) c += 1;
+          else if (s === t) c += 0.5;
+        });
+        return c / n0;
+      });
+
+      const V01 = negScores.map(function (t) {
+        let c = 0;
+        posScores.forEach(function (s) {
+          if (s > t) c += 1;
+          else if (s === t) c += 0.5;
+        });
+        return c / n1;
+      });
+
+      se = Math.sqrt(variance(V10, 1) / n1 + variance(V01, 1) / n0);
+    } else {
+      const q1 = auc / (2 - auc);
+      const q2 = 2 * auc * auc / (1 + auc);
+      se = Math.sqrt(
+        (auc * (1 - auc) + (n1 - 1) * (q1 - auc * auc) + (n0 - 1) * (q2 - auc * auc)) /
+        (n0 * n1)
+      );
+    }
+
+    const zc = 1.959964;
+    const ci = [auc - zc * se, auc + zc * se];
+
+    const roc = rocCurve(scores, y);
+    const youden = youdenIndex(roc.points);
+
+    out.innerHTML =
+      sectionTitle('ROC / AUC analysis') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['n', y.length],
+          ['Positives', n1],
+          ['Negatives', n0],
+          ['AUC', fmt(auc)],
+          ['SE', fmt(se)],
+          ['95% CI (DeLong/Hanley)', ciText(ci)],
+          ['Youden threshold', fmt(youden.threshold)],
+          ['Sensitivity at Youden', fmt(youden.sensitivity)],
+          ['Specificity at Youden', fmt(youden.specificity)],
+          ['Youden J', fmt(youden.J)]
+        ]
+      ) +
+      '<div class="plotrow"><div class="plot"><h4>ROC curve</h4><canvas id="advROC" height="260"></canvas></div></div>';
+
+    drawROC('advROC', roc.points);
+  }
+
+  function defaultPositive(values) {
+    const uniq = [];
+
+    values.forEach(function (v) {
+      const s = String(v);
+      if (!uniq.includes(s)) uniq.push(s);
+    });
+
+    const nums = values.filter(function (v) { return typeof v === 'number' && isFinite(v); });
+
+    if (nums.length === values.length) {
+      return Math.max.apply(null, nums);
+    }
+
+    return uniq.length >= 2 ? uniq[1] : uniq[0];
+  }
+
+  function rocCurve(scores, y) {
+    const items = scores.map(function (s, i) {
+      return { score: s, y: y[i] };
+    });
+
+    items.sort(function (a, b) { return b.score - a.score; });
+
+    const n1 = y.reduce(function (a, b) { return a + b; }, 0);
+    const n0 = y.length - n1;
+
+    let TP = 0;
+    let FP = 0;
+
+    const points = [{ fpr: 0, tpr: 0, threshold: Infinity }];
+
+    let i = 0;
+
+    while (i < items.length) {
+      const t = items[i].score;
+
+      while (i < items.length && items[i].score === t) {
+        if (items[i].y === 1) TP++;
+        else FP++;
+        i++;
+      }
+
+      points.push({
+        fpr: FP / n0,
+        tpr: TP / n1,
+        threshold: t
+      });
+    }
+
+    points.push({ fpr: 1, tpr: 1, threshold: -Infinity });
+
+    return { points: points };
+  }
+
+  function youdenIndex(points) {
+    let best = { J: -Infinity, threshold: NaN, sensitivity: NaN, specificity: NaN };
+
+    points.forEach(function (p) {
+      const spec = 1 - p.fpr;
+      const J = p.tpr + spec - 1;
+
+      if (J > best.J) {
+        best = {
+          J: J,
+          threshold: p.threshold,
+          sensitivity: p.tpr,
+          specificity: spec
+        };
+      }
+    });
+
+    return best;
+  }
+
+  function drawROC(canvasId, points) {
+    const cv = document.getElementById(canvasId);
+    if (!cv || !points.length) return;
+
+    const prep = BW.prepCanvas(cv, 260);
+    const ctx = prep.ctx;
+    const w = prep.w;
+    const h = prep.h;
+
+    const pad = { l: 42, r: 14, t: 14, b: 34 };
+
+    const xmap = function (v) {
+      return pad.l + v * (w - pad.l - pad.r);
+    };
+
+    const ymap = function (v) {
+      return h - pad.b - v * (h - pad.t - pad.b);
+    };
+
+    BW.axes(ctx, w, h, pad, [0, 0.25, 0.5, 0.75, 1], [0, 0.25, 0.5, 0.75, 1], xmap, ymap, '1 - specificity', 'sensitivity');
+
+    ctx.strokeStyle = '#94a3b8';
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(xmap(0), ymap(0));
+    ctx.lineTo(xmap(1), ymap(1));
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = BW.SERIES[0];
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+
+    points.forEach(function (p, i) {
+      const x = xmap(p.fpr);
+      const y = ymap(p.tpr);
+
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+
+    ctx.stroke();
+  }
+
+  /* ---------------- Bootstrap BCa ---------------- */
+
+  function runBCA(data, out) {
+    const c = colByName(data, val('advColA'));
+    if (!c) throw new Error('Select a numeric column for bootstrap BCa.');
+
+    const x = c.values.filter(function (v) { return typeof v === 'number' && isFinite(v); });
+    if (x.length < 5) throw new Error('Fewer than 5 finite numeric values.');
+
+    const statName = val('advStat');
+    let B = parseInt(val('advBootB') || '2000', 10);
+
+    if (!isFinite(B) || B < 200) B = 200;
+    if (x.length > 2000) B = Math.min(B, 1000);
+    B = Math.min(B, 5000);
+
+    const rng = mulberry(20261107);
+
+    const theta = statFn(x, statName);
+
+    const boots = [];
+
+    for (let b = 0; b < B; b++) {
+      const sample = new Array(x.length);
+
+      for (let i = 0; i < x.length; i++) {
+        sample[i] = x[Math.floor(rng() * x.length)];
+      }
+
+      boots.push(statFn(sample, statName));
+    }
+
+    const sorted = boots.slice().sort(function (a, b) { return a - b; });
+
+    let below = 0;
+    let equal = 0;
+
+    boots.forEach(function (v) {
+      if (v < theta) below++;
+      else if (v === theta) equal++;
+    });
+
+    const prop = (below + 0.5 * equal) / B;
+    const z0 = normPpf(Math.min(0.999999, Math.max(0.000001, prop)));
+
+    const jack = x.map(function (_, i) {
+      const leave = x.slice(0, i).concat(x.slice(i + 1));
+      return statFn(leave, statName);
+    });
+
+    const jackMean = mean(jack);
+
+    let num = 0;
+    let den = 0;
+
+    jack.forEach(function (v) {
+      const d = jackMean - v;
+      num += d * d * d;
+      den += d * d;
+    });
+
+    const acc = den > 0 ? num / Math.pow(6 * Math.pow(den, 1.5), 1) : 0;
+
+    const a1 = bcaAlpha(0.025, z0, acc);
+    const a2 = bcaAlpha(0.975, z0, acc);
+
+    const ci = [
+      quantileSorted(sorted, Math.min(1, Math.max(0, a1))),
+      quantileSorted(sorted, Math.min(1, Math.max(0, a2)))
+    ];
+
+    out.innerHTML =
+      sectionTitle('Bootstrap BCa interval') +
+      table(
+        ['Metric', 'Value'],
+        [
+          ['Column', esc(c.name)],
+          ['n', x.length],
+          ['Statistic', statName],
+          ['Estimate', fmt(theta)],
+          ['Bootstrap replicates', B],
+          ['Bias-correction z0', fmt(z0)],
+          ['Acceleration', fmt(acc)],
+          ['95% BCa CI', ciText(ci)]
+        ]
+      );
+  }
+
+  function bcaAlpha(alpha, z0, acc) {
+    if (!isFinite(z0)) z0 = 0;
+    if (!isFinite(acc)) acc = 0;
+
+    const za = normPpf(alpha);
+    const num = z0 + za;
+    const den = 1 - acc * num;
+
+    return normCdf(z0 + num / (den === 0 ? 1e-12 : den));
+  }
+
+  function statFn(x, name) {
+    if (name === 'mean') return mean(x);
+    if (name === 'median') return median(x);
+    if (name === 'sd') return sd(x);
+    if (name === 'trimmed') return trimmedMean(x, 0.1);
+    return mean(x);
+  }
+
+  /* ---------------- Nelson-Aalen ---------------- */
+
+  function runNelson(data, out) {
+    const timeCol = colByName(data, val('advTime'));
+    const eventCol = colByName(data, val('advEvent'));
+    const groupColName = val('advGroup');
+    const groupCol = groupColName ? colByName(data, groupColName) : null;
+
+    if (!timeCol || !eventCol) throw new Error('Select time and event columns.');
+
+    const rows = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const t = timeCol.values[i];
+      const eRaw = eventCol.values[i];
+
+      if (typeof t !== 'number' || !isFinite(t) || eRaw == null) continue;
+
+      rows.push({
+        time: t,
+        event: eventValue(eRaw),
+        group: groupCol ? String(groupCol.values[i]) : 'All'
+      });
+    }
+
+    if (rows.length < 5) throw new Error('Fewer than 5 usable time/event observations.');
+
+    const levels = groupCol
+      ? uniqueInOrder(rows.map(function (r) { return r.group; }))
+      : ['All'];
+
+    const series = levels.map(function (lv) {
+      const sub = rows.filter(function (r) { return r.group === lv; });
+      const na = nelsonAalen(sub);
+      return { name: lv, times: na.times, H: na.H, events: sub.reduce(function (a, r) { return a + r.event; }, 0), n: sub.length };
+    });
+
+    let html = sectionTitle('Nelson-Aalen cumulative hazard');
+
+    html += table(
+      ['Group', 'n', 'Events', 'Final cumulative hazard'],
+      series.map(function (s) {
+        return [esc(s.name), s.n, s.events, fmt(s.H.length ? s.H[s.H.length - 1] : 0)];
+      })
+    );
+
+    html += '<div class="plotrow"><div class="plot"><h4>Cumulative hazard</h4><canvas id="advNA" height="260"></canvas><div class="legend" id="lg_advNA"></div></div></div>';
+
+    out.innerHTML = html;
+
+    drawNelsonAalen('advNA', series);
+  }
+
+  function eventValue(v) {
+    if (typeof v === 'number' && isFinite(v)) {
+      return Math.round(v) === 1 ? 1 : 0;
+    }
+
+    const s = String(v).toLowerCase().trim();
+    return ['1', 'event', 'dead', 'yes', 'true', 'case'].includes(s) ? 1 : 0;
+  }
+
+  function nelsonAalen(rows) {
+    rows = rows.slice().sort(function (a, b) { return a.time - b.time; });
+
+    const n = rows.length;
+    let atRisk = n;
+
+    const times = [];
+    const H = [];
+
+    let cum = 0;
+    let i = 0;
+
+    while (i < n) {
+      const t = rows[i].time;
+
+      let d = 0;
+      let totalAtT = 0;
+
+      while (i < n && rows[i].time === t) {
+        if (rows[i].event === 1) d++;
+        totalAtT++;
+        i++;
+      }
+
+      if (d > 0 && atRisk > 0) {
+        cum += d / atRisk;
+        times.push(t);
+        H.push(cum);
+      }
+
+      atRisk -= totalAtT;
+    }
+
+    return { times: times, H: H };
+  }
+
+  function drawNelsonAalen(canvasId, series) {
+    const cv = document.getElementById(canvasId);
+    if (!cv || !series.length) return;
+
+    const prep = BW.prepCanvas(cv, 260);
+    const ctx = prep.ctx;
+    const w = prep.w;
+    const h = prep.h;
+
+    const pad = { l: 46, r: 14, t: 14, b: 34 };
+
+    let tMax = 0;
+    let hMax = 0;
+
+    series.forEach(function (s) {
+      if (s.times.length) {
+        tMax = Math.max(tMax, s.times[s.times.length - 1]);
+        hMax = Math.max(hMax, s.H[s.H.length - 1]);
+      }
+    });
+
+    if (!(tMax > 0)) tMax = 1;
+    if (!(hMax > 0)) hMax = 1;
+
+    const xmap = function (v) {
+      return pad.l + (v / tMax) * (w - pad.l - pad.r);
+    };
+
+    const ymap = function (v) {
+      return h - pad.b - (v / (hMax * 1.08)) * (h - pad.t - pad.b);
+    };
+
+    BW.axes(
+      ctx, w, h, pad,
+      BW.niceTicks(0, tMax, 6),
+      BW.niceTicks(0, hMax * 1.08, 5),
+      xmap, ymap, 'time', 'cumulative hazard'
+    );
+
+    series.forEach(function (s, idx) {
+      const color = BW.SERIES[idx % BW.SERIES.length];
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      let prevH = 0;
+
+      ctx.moveTo(xmap(0), ymap(0));
+
+      for (let i = 0; i < s.times.length; i++) {
+        ctx.lineTo(xmap(s.times[i]), ymap(prevH));
+        ctx.lineTo(xmap(s.times[i]), ymap(s.H[i]));
+        prevH = s.H[i];
+      }
+
+      ctx.stroke();
+    });
+
+    const legend = document.getElementById('lg_' + canvasId);
+    if (legend) {
+      legend.innerHTML = series.map(function (s, idx) {
+        return '<span><i style="background:' + BW.SERIES[idx % BW.SERIES.length] + '"></i>' + esc(s.name) + '</span>';
+      }).join('');
+    }
+  }
+
+  /* ---------------- Friedman pairwise post-hoc ---------------- */
+
+  function runFriedmanPostHoc(data, out) {
+    const names = getChecked('advWideCols');
+    if (names.length < 3) throw new Error('Select at least 3 numeric columns for Friedman post-hoc.');
+
+    const M = getWideMatrix(data, names);
+    if (M.length < 5) throw new Error('Fewer than 5 complete cases across selected columns.');
+
+    const k = names.length;
+    const raw = [];
+
+    for (let i = 0; i < k; i++) {
+      for (let j = i + 1; j < k; j++) {
+        const diffs = M.map(function (row) { return row[i] - row[j]; });
+        const w = wilcoxonSignedRank(diffs);
+
+        raw.push({
+          i: i,
+          j: j,
+          medianDiff: median(diffs),
+          W: w.W,
+          z: w.z,
+          p: w.p
+        });
+      }
+    }
+
+    const adjusted = holmAdjust(raw.map(function (r) { return r.p; }));
+
+    const alpha = currentAlpha();
+
+    out.innerHTML =
+      sectionTitle('Friedman pairwise post-hoc (Wilcoxon signed-rank, Holm correction)') +
+      table(
+        ['Comparison', 'Median diff', 'W⁺', 'z', 'p (adj)', 'Significant'],
+        raw.map(function (r, idx) {
+          return [
+            esc(names[r.i]) + ' vs ' + esc(names[r.j]),
+            fmt(r.medianDiff),
+            fmt(r.W, 1),
+            fmt(r.z),
+            pFmt(adjusted[idx]),
+            adjusted[idx] < alpha ? 'yes' : 'no'
+          ];
+        })
+      );
+  }
+
+  function wilcoxonSignedRank(diffs) {
+    const nz = diffs.filter(function (v) { return v !== 0; });
+    const n = nz.length;
+
+    if (n === 0) return { W: 0, z: NaN, p: 1 };
+
+    const abs = nz.map(Math.abs);
+    const ranks = rankAverage(abs);
+
+    let W = 0;
+    for (let i = 0; i < n; i++) {
+      if (nz[i] > 0) W += ranks[i];
+    }
+
+    const ties = tieGroups(abs);
+
+    const mu = n * (n + 1) / 4;
+    let varW = n * (n + 1) * (2 * n + 1) / 24;
+
+    ties.forEach(function (t) {
+      varW -= (t * t * t - t) / 48;
+    });
+
+    const sigma = Math.sqrt(Math.max(0, varW));
+
+    const z = sigma > 0
+      ? (W - mu - Math.sign(W - mu) * 0.5) / sigma
+      : NaN;
+
+    const p = isFinite(z) ? 2 * normSf(Math.abs(z)) : NaN;
+
+    return { W: W, z: z, p: p };
+  }
+
+  /* ---------------- RM diagnostics ---------------- */
+
+  function runRMDiagnostics(data, out) {
+    const names = getChecked('advWideCols');
+    if (names.length < 2) throw new Error('Select at least 2 numeric columns for repeated-measures diagnostics.');
+
+    const M = getWideMatrix(data, names);
+    if (M.length < 5) throw new Error('Fewer than 5 complete cases across selected columns.');
+
+    const k = names.length;
+    const n = M.length;
+
+    const condRows = names.map(function (nm, j) {
+      const col = M.map(function (r) { return r[j]; });
+
+      return [
+        esc(nm),
+        n,
+        fmt(mean(col)),
+        fmt(median(col)),
+        fmt(sd(col)),
+        fmt(iqr(col))
+      ];
+    });
+
+    const corrRows = [];
+
+    for (let i = 0; i < k; i++) {
+      for (let j = i + 1; j < k; j++) {
+        const x = M.map(function (r) { return r[i]; });
+        const y = M.map(function (r) { return r[j]; });
+
+        corrRows.push([
+          esc(names[i]) + ' × ' + esc(names[j]),
+          fmt(pearson(x, y))
+        ]);
+      }
+    }
+
+    const alpha = cronbachAlpha(M);
+
+    out.innerHTML =
+      sectionTitle('Repeated-measures diagnostics') +
+      table(
+        ['Condition', 'Complete n', 'Mean', 'Median', 'SD', 'IQR'],
+        condRows
+      ) +
+      table(
+        ['Pairwise correlation', 'Pearson r'],
+        corrRows
+      ) +
+      table(
+        ['Internal consistency', 'Value'],
+        [
+          ['Cronbach’s alpha', fmt(alpha)],
+          ['Complete cases', n],
+          ['Conditions', k]
+        ]
+      ) +
+      '<p class="note">Sphericity is not directly tested here; use Friedman vs RM-ANOVA agreement in the main workflow as a robustness cross-check.</p>';
+  }
+
+  /* ---------------- shared math ---------------- */
+
+  function getCompletePairs(data, nameA, nameB) {
+    const cA = colByName(data, nameA);
+    const cB = colByName(data, nameB);
+
+    if (!cA || !cB) throw new Error('Column not found.');
+
+    const out = [];
+
+    for (let i = 0; i < data.nRows; i++) {
+      const a = cA.values[i];
+      const b = cB.values[i];
+
+      if (a != null && b != null) out.push([a, b]);
+    }
+
+    return out;
+  }
+
+  function mean(a) {
+    if (!a.length) return NaN;
+    let s = 0;
+    for (let i = 0; i < a.length; i++) s += a[i];
+    return s / a.length;
+  }
+
+  function variance(a, ddof) {
+    ddof = ddof === undefined ? 1 : ddof;
+    const n = a.length;
+    if (n <= ddof) return NaN;
+
+    const m = mean(a);
+    let ss = 0;
+
+    for (let i = 0; i < n; i++) {
+      const d = a[i] - m;
+      ss += d * d;
+    }
+
+    return ss / (n - ddof);
+  }
+
+  function sd(a, ddof) {
+    return Math.sqrt(variance(a, ddof));
+  }
+
+  function median(a) {
+    return quantile(a.slice().sort(function (x, y) { return x - y; }), 0.5);
+  }
+
+  function quantile(sorted, q) {
+    const n = sorted.length;
+    if (!n) return NaN;
+    if (n === 1) return sorted[0];
+
+    const idx = (n - 1) * q;
+    const lo = Math.floor(idx);
+    const hi = Math.ceil(idx);
+
+    if (lo === hi) return sorted[lo];
+
+    return sorted[lo] + (idx - lo) * (sorted[hi] - sorted[lo]);
+  }
+
+  function quantileSorted(sorted, q) {
+    return quantile(sorted, q);
+  }
+
+  function iqr(a) {
+    const s = a.slice().sort(function (x, y) { return x - y; });
+    return quantile(s, 0.75) - quantile(s, 0.25);
+  }
+
+  function trimmedMean(x, trim) {
+    const s = x.slice().sort(function (a, b) { return a - b; });
+    const n = s.length;
+    const k = Math.floor(n * trim);
+    const t = s.slice(k, n - k);
+    return t.length ? mean(t) : NaN;
+  }
+
+  function pearson(x, y) {
+    const n = x.length;
+    const mx = mean(x);
+    const my = mean(y);
+
+    let sxy = 0;
+    let sxx = 0;
+    let syy = 0;
+
+    for (let i = 0; i < n; i++) {
+      const dx = x[i] - mx;
+      const dy = y[i] - my;
+
+      sxy += dx * dy;
+      sxx += dx * dx;
+      syy += dy * dy;
+    }
+
+    const den = Math.sqrt(sxx * syy);
+    return den > 0 ? sxy / den : NaN;
+  }
+
+  function rankAverage(x) {
+    const n = x.length;
+
+    const idx = x.map(function (v, i) {
+      return { v: v, i: i };
+    }).sort(function (a, b) { return a.v - b.v; });
+
+    const ranks = new Array(n);
+
+    let i = 0;
+
+    while (i < n) {
+      let j = i;
+
+      while (j + 1 < n && idx[j + 1].v === idx[i].v) j++;
+
+      const r = (i + j + 2) / 2;
+
+      for (let k = i; k <= j; k++) {
+        ranks[idx[k].i] = r;
+      }
+
+      i = j + 1;
+    }
+
+    return ranks;
+  }
+
+  function tieGroups(x) {
+    const s = x.slice().sort(function (a, b) { return a - b; });
+    const out = [];
+
+    let i = 0;
+
+    while (i < s.length) {
+      let j = i;
+
+      while (j + 1 < s.length && s[j + 1] === s[i]) j++;
+
+      if (j > i) out.push(j - i + 1);
+
+      i = j + 1;
+    }
+
+    return out;
+  }
+
+  function holmAdjust(ps) {
+    const m = ps.length;
+    const order = ps.map(function (_, i) { return i; }).sort(function (a, b) { return ps[b] - ps[a]; });
+    const out = new Array(m).fill(0);
+
+    let running = 0;
+
+    for (let rank = 0; rank < m; rank++) {
+      const idx = order[rank];
+      running = Math.max(running, Math.min(1, (m - rank) * ps[idx]));
+      out[idx] = running;
+    }
+
+    return out;
+  }
+
+  function uniqueInOrder(values) {
+    const seen = [];
+
+    values.forEach(function (v) {
+      if (v == null) return;
+      const s = String(v);
+      if (!seen.includes(s)) seen.push(s);
+    });
+
+    return seen;
+  }
+
+  function mulberry(seed) {
+    let s = seed >>> 0;
+
+    return function () {
+      s |= 0;
+      s = (s + 0x6D2B79F5) | 0;
+
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /* ---------------- special functions ---------------- */
+
+  function erf(x) {
+    const sign = x < 0 ? -1 : 1;
+    x = Math.abs(x);
+
+    const t = 1 / (1 + 0.3275911 * x);
+    const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+
+    return sign * y;
+  }
+
+  function normCdf(z) {
+    return 0.5 * (1 + erf(z / Math.SQRT2));
+  }
+
+  function normSf(z) {
+    return 1 - normCdf(z);
+  }
+
+  function normPpf(p) {
+    if (p <= 0) return -Infinity;
+    if (p >= 1) return Infinity;
+
+    let lo = -40;
+    let hi = 40;
+
+    for (let i = 0; i < 120; i++) {
+      const mid = (lo + hi) / 2;
+      if (normCdf(mid) < p) lo = mid;
+      else hi = mid;
+    }
+
+    return (lo + hi) / 2;
+  }
+
+  function lgamma(x) {
+    const c = [
+      76.18009172947146,
+      -86.50532032941678,
+      24.01409824083091,
+      -1.231739572450155,
+      0.001208650973866179,
+      -0.000005395239384953
+    ];
+
+    let y = x;
+    let tmp = x + 5.5;
+    tmp -= (x + 0.5) * Math.log(tmp);
+
+    let ser = 1.000000000190015;
+
+    for (let j = 0; j < 6; j++) {
+      ser += c[j] / ++y;
+    }
+
+    return -tmp + Math.log(2.5066282746310005 * ser / x);
+  }
+
+  function betacf(a, b, x) {
+    const qab = a + b;
+    const qap = a + 1;
+    const qam = a - 1;
+
+    let c = 1;
+    let d = 1 - qab * x / qap;
+
+    if (Math.abs(d) < 1e-300) d = 1e-300;
+    d = 1 / d;
+
+    let h = d;
+
+    for (let m = 1; m <= 200; m++) {
+      const m2 = 2 * m;
+
+      let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+
+      d = 1 + aa * d;
+      if (Math.abs(d) < 1e-300) d = 1e-300;
+
+      c = 1 + aa / c;
+      if (Math.abs(c) < 1e-300) c = 1e-300;
+
+      d = 1 / d;
+      h *= d * c;
+
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+
+      d = 1 + aa * d;
+      if (Math.abs(d) < 1e-300) d = 1e-300;
+
+      c = 1 + aa / c;
+      if (Math.abs(c) < 1e-300) c = 1e-300;
+
+      d = 1 / d;
+
+      const del = d * c;
+      h *= del;
+
+      if (Math.abs(del - 1) < 1e-14) break;
+    }
+
+    return h;
+  }
+
+  function betainc(a, b, x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+
+    const bt = Math.exp(
+      lgamma(a + b) - lgamma(a) - lgamma(b) +
+      a * Math.log(x) + b * Math.log(1 - x)
+    );
+
+    return x < (a + 1) / (a + b + 2)
+      ? bt * betacf(a, b, x) / a
+      : 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+
+  function fCdf(f, d1, d2) {
+    if (!isFinite(f) || f <= 0) return 0;
+    const x = d1 * f / (d1 * f + d2);
+    return betainc(d1 / 2, d2 / 2, x);
+  }
+
+  function fPpf(p, d1, d2) {
+    if (p <= 0) return 0;
+    if (p >= 1) return Infinity;
+
+    let lo = 0;
+    let hi = 1;
+
+    while (fCdf(hi, d1, d2) < p) {
+      hi *= 2;
+      if (hi > 1e9) break;
+    }
+
+    for (let i = 0; i < 120; i++) {
+      const mid = (lo + hi) / 2;
+      if (fCdf(mid, d1, d2) < p) lo = mid;
+      else hi = mid;
+    }
+
+    return (lo + hi) / 2;
+  }
+
+  /* ---------------- formatting ---------------- */
+
+  function currentAlpha() {
+    return BW.state && BW.state.cfg && BW.state.cfg.alpha ? BW.state.cfg.alpha : 0.05;
+  }
+
+  function fmt(v, d) {
+    if (BS && BS.fmt) return BS.fmt(v, d == null ? 4 : d);
+    return isFinite(v) ? Number(v).toFixed(d == null ? 4 : d) : '—';
+  }
+
+  function pFmt(p) {
+    if (BS && BS.pFmt) return BS.pFmt(p);
+    if (!isFinite(p)) return '—';
+    if (p < 0.0001) return '< 0.0001';
+    return p.toFixed(4);
+  }
+
+  function ciText(ci) {
+    if (!ci || !isFinite(ci[0]) || !isFinite(ci[1])) return '—';
+    return '[' + fmt(ci[0], 4) + ', ' + fmt(ci[1], 4) + ']';
+  }
+
+  function esc(s) {
+    return BW.esc(s);
+  }
+
+  function sectionTitle(text) {
+    return '<div class="sect-h"><h3>' + esc(text) + '</h3></div>';
+  }
+
+  function table(headers, rows) {
+    let html = '<div class="tblwrap"><table class="tbl"><thead><tr>';
+
+    headers.forEach(function (h, i) {
+      html += '<th' + (i > 0 ? ' class="num"' : '') + '>' + h + '</th>';
+    });
+
+    html += '</tr></thead><tbody>';
+
+    rows.forEach(function (r) {
+      html += '<tr>';
+      r.forEach(function (cell, i) {
+        html += '<td' + (i > 0 ? ' class="num"' : '') + '>' + cell + '</td>';
+      });
+      html += '</tr>';
+    });
+
+    html += '</tbody></table></div>';
+    return html;
+  }
+
+  boot();
+})();
+</script>
+<!-- ================= END Chunk-3 ================= -->
+
+<!-- ================= BEGIN Chunk-4 ================= -->
+<script>
+(function () {
+  'use strict';
+
+  if (window.__BW_P4_LOADED) return;
+  window.__BW_P4_LOADED = true;
+
+  let BW = null;
+  let BS = null;
+
+  window.__BW_EXT_RESULTS = window.__BW_EXT_RESULTS || [];
+
+  const timers = {};
+  let autoTries = 0;
+
+  function boot() {
+    BW = window.__BW;
+    BS = window.BS;
+
+    if (!BW) {
+      setTimeout(boot, 80);
+      return;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
+  }
+
+  function start() {
+    patchRenderAll();
+    trySetupObservers();
+    updateExtSummary();
+    tryInjectAutoButtons();
+    scanExistingOutputs();
+  }
+
+  /* ---------------- render integration ---------------- */
+
+  function patchRenderAll() {
+    if (!BW.renderAll || BW.renderAll.__extPatched) return;
+
+    const orig = BW.renderAll;
+
+    const wrapped = function () {
+      const ret = orig.apply(this, arguments);
+      setTimeout(updateExtSummary, 0);
+      return ret;
+    };
+
+    wrapped.__extPatched = true;
+    BW.renderAll = wrapped;
+  }
+
+  /* ---------------- capture advanced outputs ---------------- */
+
+  function trySetupObservers() {
+    let missing = false;
+
+    ['unsupOut', 'extraOut', 'advOut'].forEach(function (id) {
+      const el = document.getElementById(id);
+
+      if (!el) {
+        missing = true;
+        return;
+      }
+
+      if (el.__extObserved) return;
+      el.__extObserved = true;
+
+      const obs = new MutationObserver(function () {
+        scheduleCapture(id);
+      });
+
+      obs.observe(el, {
+        childList: true,
+        subtree: true,
+        characterData: true
+      });
+    });
+
+    if (missing && autoTries < 30) {
+      setTimeout(trySetupObservers, 300);
+    }
+  }
+
+  function scanExistingOutputs() {
+    ['unsupOut', 'extraOut', 'advOut'].forEach(function (id) {
+      const el = document.getElementById(id);
+      if (el && el.innerHTML.trim()) scheduleCapture(id);
+    });
+  }
+
+  function scheduleCapture(id) {
+    clearTimeout(timers[id]);
+    timers[id] = setTimeout(function () {
+      captureOutput(id);
+    }, 280);
+  }
+
+  function captureOutput(id) {
+    const out = document.getElementById(id);
+    if (!out || !out.innerHTML.trim()) return;
+
+    // do not capture pure error boxes
+    if (out.querySelector('.alert.bad') && !out.querySelector('table')) return;
+
+    let section = '';
+    let method = '';
+    let columns = '';
+
+    if (id === 'unsupOut') {
+      section = 'P5 · Unsupervised';
+      method = selectText('unsupMethod');
+      columns = checkedValues('unsupCols');
+    } else if (id === 'extraOut') {
+      section = 'P6 · Extra tests';
+      method = selectText('extraMethod');
+      columns = p6ColumnsSummary();
+    } else if (id === 'advOut') {
+      section = 'P7 · Advanced';
+      method = selectText('advMethod');
+      columns = p7ColumnsSummary();
+    }
+
+    const markdown = markdownFromHtml(out.innerHTML);
+    if (!markdown || markdown.trim().length < 10) return;
+
+    const results = window.__BW_EXT_RESULTS;
+
+    const item = {
+      ts: new Date().toLocaleString(),
+      section: section,
+      method: method || '—',
+      columns: columns || '—',
+      markdown: markdown,
+      html: out.innerHTML
+    };
+
+    // avoid duplicate consecutive captures
+    if (
+      results.length &&
+      results[0].section === item.section &&
+      results[0].method === item.method &&
+      results[0].markdown === item.markdown
+    ) {
+      return;
+    }
+
+    results.unshift(item);
+    if (results.length > 30) results.length = 30;
+
+    updateExtSummary();
+  }
+
+  function p6ColumnsSummary() {
+    const m = val('extraMethod');
+    const parts = [];
+
+    if (m === 'mcnemar') {
+      parts.push(val('extraBin1'), val('extraBin2'));
+    } else if (m === 'cochran') {
+      parts.push(checkedValues('extraCochranCols'));
+    } else if (m === 'kendall') {
+      parts.push(val('extraX'), val('extraY'));
+    } else if (m === 'partial') {
+      parts.push(val('extraX'), val('extraY'), val('extraControl'));
+    } else if (m === 'yuen' || m === 'brownforsythe') {
+      parts.push(val('extraOutcome'), val('extraGroup'));
+    } else if (m === 'regdiag') {
+      parts.push(val('extraOutcome'), checkedValues('extraPredCols'));
+    }
+
+    return parts.filter(Boolean).join(', ');
+  }
+
+  function p7ColumnsSummary() {
+    const m = val('advMethod');
+    const parts = [];
+
+    if (m === 'kappa') {
+      parts.push(val('advColA'), val('advColB'));
+    } else if (m === 'icc' || m === 'friedmanPostHoc' || m === 'rmDiagnostics') {
+      parts.push(checkedValues('advWideCols'));
+    } else if (m === 'roc') {
+      parts.push(val('advColA'), val('advColB'));
+    } else if (m === 'bca') {
+      parts.push(val('advColA'));
+    } else if (m === 'nelson') {
+      parts.push(val('advTime'), val('advEvent'), val('advGroup'));
+    }
+
+    return parts.filter(Boolean).join(', ');
+  }
+
+  /* ---------------- Summary extension card ---------------- */
+
+  function updateExtSummary() {
+    const pane = document.getElementById('tab-summary');
+    if (!pane) return;
+
+    let card = document.getElementById('extSummaryCard');
+
+    if (!card) {
+      card = document.createElement('article');
+      card.className = 'card';
+      card.id = 'extSummaryCard';
+      card.addEventListener('click', onExtClick);
+      pane.appendChild(card);
+    }
+
+    const results = window.__BW_EXT_RESULTS || [];
+
+    let html = '<div class="card-head"><h3>Advanced modules — captured results</h3>' +
+      '<span class="spacer"></span>' +
+      '<button class="btn ghost" data-action="clear">Clear</button>' +
+      '<button class="btn" data-action="copy-all">Copy advanced MD</button>' +
+      '<button class="btn" data-action="download-all">Download advanced MD</button>' +
+      '<button class="btn" data-action="copy-combined">Copy full + advanced MD</button>' +
+      '<button class="btn primary" data-action="download-combined">Download full report</button></div>' +
+      '<p class="verdict-line">This panel collects results generated in the P5, P6 and P7 modules. ' +
+      'Use “Copy full + advanced MD” or “Download full report” to combine the original workbench report ' +
+      'with all captured advanced analyses.</p>';
+
+    if (!results.length) {
+      html += '<div class="alert info">No advanced analyses captured yet. Run one or more analyses in P5, P6 or P7, then return here.</div>';
+      card.innerHTML = html;
+      return;
+    }
+
+    html += '<div class="tblwrap"><table class="tbl"><thead><tr>' +
+      '<th>#</th><th>Module</th><th>Method</th><th>Columns / settings</th><th>Time</th><th></th>' +
+      '</tr></thead><tbody>';
+
+    results.forEach(function (r, i) {
+      const cols = r.columns && r.columns.length > 80
+        ? r.columns.slice(0, 80) + '…'
+        : (r.columns || '—');
+
+      html += '<tr>' +
+        '<td class="num">' + (i + 1) + '</td>' +
+        '<td>' + BW.esc(r.section) + '</td>' +
+        '<td>' + BW.esc(r.method) + '</td>' +
+        '<td>' + BW.esc(cols) + '</td>' +
+        '<td>' + BW.esc(r.ts) + '</td>' +
+        '<td style="white-space:nowrap">' +
+        '<button class="btn ghost" data-action="copy-item" data-idx="' + i + '">Copy MD</button> ' +
+        '<button class="btn ghost" data-action="download-item" data-idx="' + i + '">Download</button>' +
+        '</td></tr>';
+    });
+
+    html += '</tbody></table></div>';
+
+    card.innerHTML = html;
+  }
+
+  function onExtClick(e) {
+    const btn = e.target.closest ? e.target.closest('button') : null;
+    if (!btn) return;
+
+    const action = btn.dataset.action;
+    const idx = parseInt(btn.dataset.idx || '-1', 10);
+    const results = window.__BW_EXT_RESULTS || [];
+
+    if (action === 'clear') {
+      results.length = 0;
+      updateExtSummary();
+      return;
+    }
+
+    if (action === 'copy-all') {
+      copyText(allAdvancedMarkdown(), btn);
+      return;
+    }
+
+    if (action === 'download-all') {
+      downloadText('advanced-analyses.md', allAdvancedMarkdown());
+      return;
+    }
+
+    if (action === 'copy-combined') {
+      copyText(combinedMarkdown(), btn);
+      return;
+    }
+
+    if (action === 'download-combined') {
+      downloadText('biostat-full-report.md', combinedMarkdown());
+      return;
+    }
+
+    if (action === 'copy-item') {
+      if (results[idx]) copyText(results[idx].markdown, btn);
+      return;
+    }
+
+    if (action === 'download-item') {
+      if (results[idx]) downloadText('advanced-analysis-' + (idx + 1) + '.md', results[idx].markdown);
+      return;
+    }
+  }
+
+  /* ---------------- Markdown export ---------------- */
+
+  function allAdvancedMarkdown() {
+    const results = (window.__BW_EXT_RESULTS || []).slice().reverse();
+
+    if (!results.length) {
+      return '# Advanced analyses\n\nNo advanced analyses captured yet.\n';
+    }
+
+    let out = '# Advanced analyses export\n\nGenerated: ' + new Date().toLocaleString() + '\n\n';
+
+    results.forEach(function (r, i) {
+      out += '## ' + (i + 1) + '. ' + r.section + ' — ' + r.method + '\n\n';
+      out += 'Time: ' + r.ts + '\n\n';
+      out += 'Columns / settings: ' + (r.columns || '—') + '\n\n';
+      out += r.markdown + '\n\n---\n\n';
+    });
+
+    return out.trim() + '\n';
+  }
+
+  function combinedMarkdown() {
+    let base = '';
+
+    if (BW.state && BW.state.result && typeof BW.buildMarkdown === 'function') {
+      try {
+        base = BW.buildMarkdown(BW.state.result);
+      } catch (err) {
+        base = '';
+      }
+    }
+
+    const adv = allAdvancedMarkdown();
+
+    if (!base) return adv;
+    return base + '\n\n---\n\n' + adv;
+  }
+
+  function markdownFromHtml(html) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = html;
+
+    const parts = [];
+
+    const nodes = tmp.querySelectorAll('h3, h4, h5, table, p, div.alert, div.note, canvas, pre');
+
+    nodes.forEach(function (el) {
+      if (el.closest('table') && el.tagName !== 'TABLE') return;
+
+      if (el.tagName === 'CANVAS') {
+        parts.push('_[Chart omitted from Markdown export]_');
+        return;
+      }
+
+      if (el.tagName === 'TABLE') {
+        parts.push(tableToMarkdown(el));
+        return;
+      }
+
+      if (el.tagName === 'PRE') {
+        parts.push('```\n' + el.textContent.trim() + '\n```');
+        return;
+      }
+
+      const txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!txt) return;
+
+      if (/^H[3-5]$/.test(el.tagName)) {
+        parts.push('**' + txt + '**');
+      } else if (el.classList.contains('alert') || el.classList.contains('note')) {
+        parts.push('> ' + txt);
+      } else {
+        parts.push(txt);
+      }
+    });
+
+    return parts.filter(Boolean).join('\n\n');
+  }
+
+  function tableToMarkdown(tbl) {
+    const rows = Array.prototype.slice.call(tbl.querySelectorAll('tr'));
+    if (!rows.length) return '';
+
+    const matrix = rows.map(function (tr) {
+      return Array.prototype.map.call(tr.querySelectorAll('th, td'), function (cell) {
+        return (cell.textContent || '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .replace(/\|/g, '\\|');
+      });
+    });
+
+    const width = Math.max.apply(null, matrix.map(function (r) { return r.length; }));
+
+    matrix.forEach(function (r) {
+      while (r.length < width) r.push('');
+    });
+
+    const header = matrix[0];
+    const body = matrix.slice(1);
+
+    let md = '| ' + header.join(' | ') + ' |\n';
+    md += '|' + header.map(function () { return ' --- '; }).join('|') + '|\n';
+
+    body.forEach(function (r) {
+      md += '| ' + r.join(' | ') + ' |\n';
+    });
+
+    return md;
+  }
+
+  /* ---------------- auto-detect columns ---------------- */
+
+  function tryInjectAutoButtons() {
+    autoTries++;
+
+    const a = injectAutoBtn('btnUnsupRun', 'btnP5Auto', 'Auto-detect columns', autoP5);
+    const b = injectAutoBtn('btnExtraRun', 'btnP6Auto', 'Auto-detect columns', autoP6);
+    const c = injectAutoBtn('btnAdvRun', 'btnP7Auto', 'Auto-detect columns', autoP7);
+
+    if (!(a && b && c) && autoTries < 30) {
+      setTimeout(tryInjectAutoButtons, 300);
+    }
+  }
+
+  function injectAutoBtn(runId, autoId, label, fn) {
+    const run = document.getElementById(runId);
+    if (!run) return false;
+
+    if (document.getElementById(autoId)) return true;
+
+    const btn = document.createElement('button');
+    btn.id = autoId;
+    btn.type = 'button';
+    btn.className = 'btn ghost';
+    btn.textContent = label;
+
+    run.parentNode.insertBefore(btn, run);
+    btn.addEventListener('click', fn);
+
+    return true;
+  }
+
+  function autoP5() {
+    const refresh = document.getElementById('btnUnsupRefresh');
+    if (refresh) refresh.click();
+
+    setTimeout(function () {
+      const data = BW.state && BW.state.data;
+      if (!data) return;
+
+      const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+      const names = numeric.slice(0, 12).map(function (c) { return c.name; });
+
+      checkByIds('unsupCols', names);
+
+      const cats = data.columns.filter(function (c) { return c.type === 'categorical'; });
+      if (cats.length) setSelect('unsupLabel', cats[0].name);
+
+      const std = document.getElementById('unsupStandardize');
+      if (std) std.checked = true;
+    }, 90);
+  }
+
+  function autoP6() {
+    const refresh = document.getElementById('btnExtraRefresh');
+    if (refresh) refresh.click();
+
+    setTimeout(function () {
+      const data = BW.state && BW.state.data;
+      if (!data) return;
+
+      const method = val('extraMethod');
+
+      const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+      const binary = binaryColumns(data);
+      const cat2 = data.columns.filter(function (c) {
+        return c.type === 'categorical' && uniqueCount(c) === 2;
+      });
+
+      if (method === 'mcnemar' && binary.length >= 2) {
+        setSelect('extraBin1', binary[0].name);
+        setSelect('extraBin2', binary[1].name);
+      }
+
+      if (method === 'cochran') {
+        checkByIds('extraCochranCols', binary.slice(0, 3).map(function (c) { return c.name; }));
+      }
+
+      if (method === 'kendall' && numeric.length >= 2) {
+        setSelect('extraX', numeric[0].name);
+        setSelect('extraY', numeric[1].name);
+      }
+
+      if (method === 'partial' && numeric.length >= 3) {
+        setSelect('extraX', numeric[0].name);
+        setSelect('extraY', numeric[1].name);
+        setSelect('extraControl', numeric[2].name);
+      }
+
+      if (method === 'yuen' || method === 'brownforsythe') {
+        if (numeric.length) setSelect('extraOutcome', numeric[0].name);
+
+        const grp = cat2.length
+          ? cat2[0]
+          : data.columns.find(function (c) { return c.type === 'categorical' && uniqueCount(c) >= 2; });
+
+        if (grp) setSelect('extraGroup', grp.name);
+      }
+
+      if (method === 'regdiag') {
+        const outcome = numeric.length ? numeric[0].name : '';
+        if (outcome) setSelect('extraOutcome', outcome);
+
+        const preds = numeric
+          .filter(function (c) { return c.name !== outcome; })
+          .slice(0, 3)
+          .map(function (c) { return c.name; });
+
+        checkByIds('extraPredCols', preds);
+      }
+    }, 100);
+  }
+
+  function autoP7() {
+    const refresh = document.getElementById('btnAdvRefresh');
+    if (refresh) refresh.click();
+
+    setTimeout(function () {
+      const data = BW.state && BW.state.data;
+      if (!data) return;
+
+      const method = val('advMethod');
+
+      const numeric = data.columns.filter(function (c) { return c.type === 'numeric'; });
+      const categorical = data.columns.filter(function (c) { return c.type === 'categorical'; });
+      const binary = binaryColumns(data);
+      const cat2 = categorical.filter(function (c) { return uniqueCount(c) === 2; });
+
+      if (method === 'kappa') {
+        const candidates = data.columns.filter(function (c) { return uniqueCount(c) >= 2; });
+        if (candidates.length >= 2) {
+          setSelect('advColA', candidates[0].name);
+          setSelect('advColB', candidates[1].name);
+        }
+      }
+
+      if (method === 'icc' || method === 'friedmanPostHoc' || method === 'rmDiagnostics') {
+        checkByIds('advWideCols', numeric.slice(0, 3).map(function (c) { return c.name; }));
+      }
+
+      if (method === 'roc') {
+        const outcome = binary.length ? binary[0] : (cat2.length ? cat2[0] : null);
+        const score = numeric.find(function (c) {
+          return !outcome || c.name !== outcome.name;
+        });
+
+        if (outcome) setSelect('advColA', outcome.name);
+        if (score) setSelect('advColB', score.name);
+      }
+
+      if (method === 'bca' && numeric.length) {
+        setSelect('advColA', numeric[0].name);
+      }
+
+      if (method === 'nelson') {
+        const timeHints = ['time', 'month', 'day', 'duration', 'follow', 'surv'];
+        const eventHints = ['event', 'status', 'dead', 'death', 'censor'];
+
+        const timeCol =
+          findByHints(numeric, timeHints) ||
+          numeric[0];
+
+        const eventCol =
+          findByHints(data.columns, eventHints) ||
+          binary[0] ||
+          cat2[0] ||
+          data.columns.find(function (c) { return uniqueCount(c) <= 5; });
+
+        if (timeCol) setSelect('advTime', timeCol.name);
+        if (eventCol) setSelect('advEvent', eventCol.name);
+        if (cat2.length) setSelect('advGroup', cat2[0].name);
+      }
+    }, 100);
+  }
+
+  /* ---------------- helpers ---------------- */
+
+  function val(id) {
+    const el = document.getElementById(id);
+    return el ? el.value : '';
+  }
+
+  function selectText(id) {
+    const sel = document.getElementById(id);
+    if (!sel || sel.selectedIndex < 0) return val(id) || '—';
+    return sel.options[sel.selectedIndex].textContent.trim();
+  }
+
+  function checkedValues(id) {
+    const box = document.getElementById(id);
+    if (!box) return '';
+
+    return Array.prototype.map.call(
+      box.querySelectorAll('input[type="checkbox"]:checked'),
+      function (inp) { return inp.value; }
+    ).join(', ');
+  }
+
+  function checkByIds(id, names) {
+    const box = document.getElementById(id);
+    if (!box) return;
+
+    box.querySelectorAll('input[type="checkbox"]').forEach(function (inp) {
+      inp.checked = names.includes(inp.value);
+    });
+  }
+
+  function setSelect(id, value) {
+    const sel = document.getElementById(id);
+    if (!sel || !value) return;
+
+    const ok = Array.prototype.some.call(sel.options, function (o) {
+      return o.value === value;
+    });
+
+    if (ok) sel.value = value;
+  }
+
+  function uniqueCount(col) {
+    const s = new Set();
+    col.values.forEach(function (v) {
+      if (v != null) s.add(String(v));
+    });
+    return s.size;
+  }
+
+  function binaryColumns(data) {
+    return data.columns.filter(function (c) {
+      return uniqueCount(c) === 2;
+    });
+  }
+
+  function findByHints(cols, hints) {
+    return cols.find(function (c) {
+      const nm = c.name.toLowerCase();
+      return hints.some(function (h) { return nm.includes(h); });
+    });
+  }
+
+  function copyText(text, btn) {
+    const done = function () {
+      if (!btn) return;
+      const old = btn.textContent;
+      btn.textContent = '✓ copied';
+      setTimeout(function () { btn.textContent = old; }, 1400);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        fallbackCopy(text, done);
+      });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+
+    try {
+      document.execCommand('copy');
+    } catch (e) {
+      // clipboard unavailable
+    }
+
+    document.body.removeChild(ta);
+    done();
+  }
+
+  function downloadText(filename, text) {
+    const blob = new Blob([text], { type: 'text/markdown' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    setTimeout(function () {
+      URL.revokeObjectURL(a.href);
+    }, 4000);
+  }
+
+  boot();
+})();
+</script>
+<!-- ================= END Chunk-4 ================= -->
+
+<!-- ================= BEGIN Chunk-5 ================= -->
+<script>
+(function () {
+  'use strict';
+
+  if (window.__BW_QA_LOADED) return;
+  window.__BW_QA_LOADED = true;
+
+  let BW = null;
+  let BS = null;
+  let engResults = null;
+  let reportTxt = '';
+
+  function boot() {
+    BW = window.__BW;
+    BS = window.BS;
+
+    if (!BW || !BS) {
+      setTimeout(boot, 80);
+      return;
+    }
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', start);
+    } else {
+      start();
+    }
+  }
+
+  function start() {
+    patchRenderAll();
+    setTimeout(renderQA, 80);
+  }
+
+  function patchRenderAll() {
+    if (!BW.renderAll || BW.renderAll.__qaPatched) return;
+
+    const orig = BW.renderAll;
+
+    const wrapped = function () {
+      const ret = orig.apply(this, arguments);
+      setTimeout(renderQA, 0);
+      return ret;
+    };
+
+    wrapped.__qaPatched = true;
+    BW.renderAll = wrapped;
+  }
+
+  function esc(s) {
+    return BW.esc(s);
+  }
+
+  function ok(b) {
+    return b
+      ? '<span style="color:#067647;font-weight:700">✓</span>'
+      : '<span style="color:#b42318;font-weight:700">✗</span>';
+  }
+
+  function tbl(headers, rows) {
+    let h = '<div class="tblwrap"><table class="tbl"><thead><tr>';
+
+    headers.forEach(function (x) {
+      h += '<th>' + x + '</th>';
+    });
+
+    h += '</tr></thead><tbody>';
+
+    rows.forEach(function (r) {
+      h += '<tr>';
+      r.forEach(function (c) {
+        h += '<td>' + c + '</td>';
+      });
+      h += '</tr>';
+    });
+
+    h += '</tbody></table></div>';
+    return h;
+  }
+
+  function moduleChecks() {
+    const defs = [
+      ['Part 1 · P5 Unsupervised', '__BW_P5_LOADED', ['tab-phase5', 'unsupMethod', 'btnUnsupRun', 'unsupOut']],
+      ['Part 2 · P6 Extra tests', '__BW_P6_LOADED', ['tab-phase6', 'extraMethod', 'btnExtraRun', 'extraOut']],
+      ['Part 3 · P7 Advanced', '__BW_P7_LOADED', ['tab-phase7', 'advMethod', 'btnAdvRun', 'advOut']],
+      ['Part 4 · Export glue', '__BW_P4_LOADED', ['extSummaryCard']],
+      ['Part 5 · QA panel', '__BW_QA_LOADED', []]
+    ];
+
+    return defs.map(function (d) {
+      const loaded = !!window[d[1]];
+      const missing = d[2].filter(function (id) {
+        return !document.getElementById(id);
+      });
+
+      return {
+        name: d[0],
+        loaded: loaded,
+        missing: missing,
+        pass: loaded && missing.length === 0
+      };
+    });
+  }
+
+  function structureChecks() {
+    const out = [];
+
+    const tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+    const ids = tabs.map(function (t) { return t.dataset.tab; }).filter(Boolean);
+
+    const orphanTabs = ids.filter(function (id) {
+      return !document.getElementById('tab-' + id);
+    });
+
+    const dupes = ids.filter(function (id, i) {
+      return ids.indexOf(id) !== i;
+    });
+
+    out.push({
+      name: 'Every tab has a matching pane',
+      pass: orphanTabs.length === 0,
+      detail: orphanTabs.length ? 'orphan: ' + orphanTabs.join(', ') : ids.length + ' tabs matched'
+    });
+
+    out.push({
+      name: 'No duplicate tab ids',
+      pass: dupes.length === 0,
+      detail: dupes.length ? dupes.join(', ') : 'none'
+    });
+
+    out.push({
+      name: 'Single <html>/<body> document',
+      pass: document.querySelectorAll('html').length === 1 && document.querySelectorAll('body').length === 1,
+      detail: 'structure intact'
+    });
+
+    out.push({
+      name: 'renderAll wrapped by QA',
+      pass: !!(BW.renderAll && BW.renderAll.__qaPatched),
+      detail: 'summary re-render hook active'
+    });
+
+    out.push({
+      name: 'Advanced results store',
+      pass: Array.isArray(window.__BW_EXT_RESULTS),
+      detail: (window.__BW_EXT_RESULTS || []).length + ' captured analyses'
+    });
+
+    return out;
+  }
+
+  function missingAudit() {
+    const d = BW.state && BW.state.data;
+
+    if (!d) {
+      return { rows: [], complete: 0, n: 0, risk: false };
+    }
+
+    let complete = 0;
+
+    for (let i = 0; i < d.nRows; i++) {
+      let rowOk = true;
+
+      for (let j = 0; j < d.columns.length; j++) {
+        if (d.columns[j].values[i] == null) {
+          rowOk = false;
+          break;
+        }
+      }
+
+      if (rowOk) complete++;
+    }
+
+    const rows = d.columns
+      .filter(function (c) { return c.nMissing > 0; })
+      .map(function (c) {
+        return [c.name, c.n, c.nMissing, (100 * c.nMissing / d.nRows).toFixed(1) + '%'];
+      });
+
+    return {
+      rows: rows,
+      complete: complete,
+      n: d.nRows,
+      risk: rows.length > 0
+    };
+  }
+
+  function engineChecks() {
+    const res = [];
+
+    function add(name, fn) {
+      try {
+        const d = fn();
+        res.push({ name: name, pass: !!d.pass, detail: d.detail });
+      } catch (e) {
+        res.push({ name: name, pass: false, detail: e.message || String(e) });
+      }
+    }
+
+    add('BS.parseTable — header + types', function () {
+      const d = BS.parseTable('g,x\nA,1\nA,2\nB,3\nB,4');
+      return {
+        pass: d.nRows === 4 && d.columns.length === 2 && d.columns[1].type === 'numeric',
+        detail: d.nRows + ' rows, x=' + d.columns[1].type
+      };
+    });
+
+    add('BS.assessVariable — symmetric vector', function () {
+      const a = BS.assessVariable('t', [1, 2, 3, 4, 5], 0.05);
+      return {
+        pass: Math.abs(a.stats.mean - 3) < 1e-9 && Math.abs(a.stats.skew) < 1e-6,
+        detail: 'mean=' + BS.fmt(a.stats.mean, 2) + ', skew=' + BS.fmt(a.stats.skew, 2)
+      };
+    });
+
+    add('BS.runAnalysis — two independent groups', function () {
+      const csv = 'g,x\nA,1\nA,2\nA,3\nA,4\nA,5\nB,3\nB,4\nB,5\nB,6\nB,7';
+      const d = BS.parseTable(csv);
+
+      const r = BS.runAnalysis(d, {
+        researchQuestion: 'qa',
+        design: 'two-independent',
+        outcomeVar: 'x',
+        secondVar: 'g',
+        conditionVars: [],
+        weightsVar: '',
+        mu0: 0,
+        alpha: 0.05,
+        semantics: 'general'
+      });
+
+      const p = r.phase4.primary.p;
+      const hasEff = r.phase4.primary.effects && r.phase4.primary.effects.length > 0;
+
+      return {
+        pass: isFinite(p) && p >= 0 && p <= 1 && hasEff,
+        detail: r.phase4.primary.name + ', p=' + BS.pFmt(p) + ', effect sizes=' + (hasEff ? 'yes' : 'NO')
+      };
+    });
+
+    add('BS.runAnalysis — paired design', function () {
+      const csv = 'pre,post\n10,12\n11,13\n12,15\n13,14\n14,17\n15,18';
+      const d = BS.parseTable(csv);
+
+      const r = BS.runAnalysis(d, {
+        researchQuestion: 'qa',
+        design: 'paired',
+        outcomeVar: 'post',
+        secondVar: 'pre',
+        conditionVars: [],
+        weightsVar: '',
+        mu0: 0,
+        alpha: 0.05,
+        semantics: 'general'
+      });
+
+      const p = r.phase4.primary.p;
+
+      return {
+        pass: isFinite(p) && p >= 0 && p <= 1,
+        detail: r.phase4.primary.name + ', p=' + BS.pFmt(p)
+      };
+    });
+
+    add('Markdown builder available', function () {
+      return {
+        pass: typeof BW.buildMarkdown === 'function',
+        detail: 'Part 4 combined export depends on this'
+      };
+    });
+
+    add('Canvas 2D rendering', function () {
+      const c = document.createElement('canvas');
+      return {
+        pass: !!c.getContext('2d'),
+        detail: 'charts supported'
+      };
+    });
+
+    return res;
+  }
+
+  function renderQA() {
+    const pane = document.getElementById('tab-summary');
+    if (!pane) return;
+
+    let card = document.getElementById('qaCard');
+
+    if (!card) {
+      card = document.createElement('article');
+      card.className = 'card';
+      card.id = 'qaCard';
+      card.addEventListener('click', onClick);
+      pane.appendChild(card);
+    }
+
+    const mods = moduleChecks();
+    const struct = structureChecks();
+    const miss = missingAudit();
+
+    const allPass =
+      mods.every(function (m) { return m.pass; }) &&
+      struct.every(function (s) { return s.pass; });
+
+    let html =
+      '<div class="card-head"><h3>QA · installation self-check</h3>' +
+      '<span class="badge ' + (allPass ? 'ok' : 'warn') + '">' +
+      (allPass ? 'all modules installed' : 'attention needed') +
+      '</span><span class="spacer"></span>' +
+      '<button class="btn ghost" data-qa="selfcheck">Run engine self-check</button>' +
+      '<button class="btn ghost" data-qa="redraw">Redraw advanced charts</button>' +
+      '<button class="btn" data-qa="copy">Copy QA report</button></div>' +
+      '<p class="verdict-line">Verifies that Parts 1–5 are present, the original engine still answers correctly, ' +
+      'and the current dataset is complete-case safe.</p>';
+
+    html += '<div class="sect-h"><h3>Installed modules</h3></div>' +
+      tbl(
+        ['Module', 'Loaded', 'DOM ready', 'Status'],
+        mods.map(function (m) {
+          return [
+            esc(m.name),
+            ok(m.loaded),
+            m.missing.length ? esc(m.missing.join(', ')) : 'all ids present',
+            ok(m.pass)
+          ];
+        })
+      );
+
+    html += '<div class="sect-h"><h3>Document structure</h3></div>' +
+      tbl(
+        ['Check', 'Result', 'Status'],
+        struct.map(function (s) {
+          return [esc(s.name), esc(s.detail), ok(s.pass)];
+        })
+      );
+
+    html += '<div class="sect-h"><h3>Missing-data audit</h3></div>';
+
+    if (!miss.n) {
+      html += '<div class="alert info">No dataset loaded.</div>';
+    } else if (!miss.risk) {
+      html += '<div class="alert ok">No missing values. Complete cases: <b>' + miss.complete + ' / ' + miss.n +
+        '</b>. Row alignment is safe.</div>';
+    } else {
+      html += '<div class="alert warn"><b>Missing values present.</b> Complete cases across all columns: <b>' +
+        miss.complete + ' / ' + miss.n +
+        '</b>. The original P1–P4 engine filters numeric and categorical columns independently, which can misalign ' +
+        'group labels or pairs when values are missing. For confirmatory analysis, load a complete-case subset. ' +
+        'P5–P7 always use complete cases per analysis.</div>' +
+        tbl(
+          ['Column', 'n present', 'n missing', '% missing'],
+          miss.rows.map(function (r) {
+            return [esc(r[0]), r[1], r[2], r[3]];
+          })
+        );
+    }
+
+    html += '<div class="sect-h"><h3>Engine self-check</h3></div>';
+
+    if (!engResults) {
+      html += '<p class="muted small">Not run yet. Click <b>Run engine self-check</b> — it analyses two tiny synthetic ' +
+        'datasets and verifies parsing, descriptives, and that every p-value ships with an effect size.</p>';
+    } else {
+      html += tbl(
+        ['Test', 'Detail', 'Status'],
+        engResults.map(function (r) {
+          return [esc(r.name), esc(r.detail), ok(r.pass)];
+        })
+      );
+    }
+
+    html += '<div id="qaStatus"></div>';
+    html += '<p class="note" style="margin-top:8px">Advanced charts (P5–P7) are drawn once and are not registered with the ' +
+      'original resize handler. After resizing the window, use <b>Redraw advanced charts</b>.</p>';
+
+    card.innerHTML = html;
+
+    reportTxt =
+      'Biostat Workbench — QA report\nGenerated: ' + new Date().toLocaleString() + '\n\n' +
+      'MODULES\n' +
+      mods.map(function (m) {
+        return (m.pass ? '[OK]   ' : '[FAIL] ') + m.name +
+          (m.missing.length ? ' — missing: ' + m.missing.join(', ') : '');
+      }).join('\n') +
+      '\n\nSTRUCTURE\n' +
+      struct.map(function (s) {
+        return (s.pass ? '[OK]   ' : '[FAIL] ') + s.name + ' — ' + s.detail;
+      }).join('\n') +
+      '\n\nMISSING DATA\nComplete cases: ' + miss.complete + ' / ' + miss.n + '\n' +
+      (miss.rows.length
+        ? miss.rows.map(function (r) { return r[0] + ': ' + r[2] + ' missing (' + r[3] + ')'; }).join('\n')
+        : 'none') +
+      (engResults
+        ? '\n\nENGINE\n' + engResults.map(function (r) {
+            return (r.pass ? '[OK]   ' : '[FAIL] ') + r.name + ' — ' + r.detail;
+          }).join('\n')
+        : '') +
+      '\n';
+  }
+
+  function onClick(e) {
+    const btn = e.target.closest ? e.target.closest('button') : null;
+    if (!btn) return;
+
+    const a = btn.dataset.qa;
+
+    if (a === 'selfcheck') {
+      engResults = engineChecks();
+      renderQA();
+      return;
+    }
+
+    if (a === 'redraw') {
+      const map = {
+        phase5: 'btnUnsupRun',
+        phase6: 'btnExtraRun',
+        phase7: 'btnAdvRun'
+      };
+
+      const id = map[BW.state.activeTab];
+      const el = id ? document.getElementById(id) : null;
+      const st = document.getElementById('qaStatus');
+
+      if (el) {
+        el.click();
+        if (st) {
+          st.innerHTML = '<div class="alert ok">Re-ran the active advanced analysis to redraw its charts.</div>';
+        }
+      } else if (st) {
+        st.innerHTML = '<div class="alert info">Open P5, P6 or P7 first, then use this button ' +
+          '(it re-runs that tab\'s analysis).</div>';
+      }
+
+      return;
+    }
+
+    if (a === 'copy') {
+      copyText(reportTxt, btn);
+    }
+  }
+
+  function copyText(text, btn) {
+    const done = function () {
+      if (!btn) return;
+      const old = btn.textContent;
+      btn.textContent = '✓ copied';
+      setTimeout(function () {
+        btn.textContent = old;
+      }, 1400);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () {
+        fallbackCopy(text, done);
+      });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+
+    try {
+      document.execCommand('copy');
+    } catch (e) {
+      // clipboard unavailable
+    }
+
+    document.body.removeChild(ta);
+    done();
+  }
+
+  boot();
+})();
+</script>
+  <img src="biostat.png" alt="Biostat Workbench" width="160">
+
+<!-- ================= END Chunk-5 ================= -->
 </body>
 </html>
